@@ -27,6 +27,8 @@ interface UiState {
   lightMode: LightMode
   searchOpen: boolean
   toast: Toast | null
+  fly: { x: number; z: number; n: number } | null
+  flyTo: (x: number, z: number) => void
   setViewMode: (m: ViewMode) => void
   setLightMode: (m: LightMode) => void
   setSearchOpen: (v: boolean) => void
@@ -52,6 +54,8 @@ export const useUi = create<UiState>((set) => ({
   lightMode: 'auto',
   searchOpen: false,
   toast: null,
+  fly: null,
+  flyTo: (x, z) => set((s) => ({ fly: { x, z, n: (s.fly?.n ?? 0) + 1 } })),
   setViewMode: (viewMode) => set({ viewMode }),
   setLightMode: (lightMode) => set({ lightMode }),
   setSearchOpen: (searchOpen) => set({ searchOpen }),

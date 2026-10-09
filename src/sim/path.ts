@@ -41,6 +41,32 @@ function catmull(points: Vec2[], seg: number): Vec2[] {
   return dedupe(out)
 }
 
+// 폴리라인의 꺾이는 지점을 반경 r 안에서 2차 베지어로 둥글게 만든다 (트럭 주행용)
+export function rounded(points: Vec2[], r: number): Vec2[] {
+  const p = dedupe(points)
+  if (p.length < 3) return p
+  const out: Vec2[] = [p[0]]
+  for (let i = 1; i < p.length - 1; i++) {
+    const a = p[i - 1]
+    const b = p[i]
+    const c = p[i + 1]
+    const l1 = Math.hypot(b.x - a.x, b.z - a.z)
+    const l2 = Math.hypot(c.x - b.x, c.z - b.z)
+    const rr = Math.min(r, l1 / 2, l2 / 2)
+    const p1 = { x: b.x + ((a.x - b.x) / l1) * rr, z: b.z + ((a.z - b.z) / l1) * rr }
+    const p2 = { x: b.x + ((c.x - b.x) / l2) * rr, z: b.z + ((c.z - b.z) / l2) * rr }
+    out.push(p1)
+    for (let s = 1; s < 10; s++) {
+      const t = s / 10
+      const u = 1 - t
+      out.push({ x: u * u * p1.x + 2 * u * t * b.x + t * t * p2.x, z: u * u * p1.z + 2 * u * t * b.z + t * t * p2.z })
+    }
+    out.push(p2)
+  }
+  out.push(p[p.length - 1])
+  return dedupe(out)
+}
+
 export class Path {
   readonly pts: Vec2[]
   readonly cum: number[]

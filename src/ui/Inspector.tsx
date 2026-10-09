@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import * as L from '../sim/layout'
-import { type Bay, type Dock, type Forklift, type Sel, type Shipment, type Site, type Truck } from '../sim/engine'
+import { ROLE_LABEL, type Bay, type Dock, type Forklift, type Role, type Sel, type Shipment, type Site, type Truck, type Worker } from '../sim/engine'
+import type { FacilityId } from '../sim/layout'
+import { ROLE_COLOR } from '../scene/People'
 import { useUi, world } from '../store'
 import { truckAlert } from '../scene/Trucks'
 import { DIR_LABEL, DOCK_STATE_LABEL, flStateLabel, fmtClock, fmtDur, modelName, shipStatusLabel, truckPhaseLabel } from './labels'
@@ -446,6 +448,221 @@ function Overview({ site }: { site: Site }) {
   )
 }
 
+const BREAK_TEXT = ['12:00 · 18:00 · 00:00', '12:30 · 18:30 · 00:30']
+
+function WorkerView({ site, w, onClose }: { site: Site; w: Worker; onClose: () => void }) {
+  const follow = useUi((x) => x.follow)
+  const setFollow = useUi((x) => x.setFollow)
+  const t = world.time
+  const moving = site.workerMoving(w, t)
+  const onBreak = w.activity === '휴게 중'
+  const checkers = site.workers.filter((x) => x.role === 'checker')
+  const duty: Record<Role, ReactNode> = {
+    checker: (() => {
+      const k = checkers.indexOf(w)
+      const ds = site.docks.filter((d) => d.idx % checkers.length === k)
+      return ds.map((d, i) => (
+        <span key={d.id}>
+          {i > 0 && ', '}
+          <Link sel={{ kind: 'dock', id: d.id }}>{d.id}</Link>
+        </span>
+      ))
+    })(),
+    picker: '랙 피킹 · 출고 분류·랩핑',
+    lead: '현장 총괄 · 도크 순회',
+    office: '배차·서류·고객 응대',
+    guard: '정문 출입 통제',
+  }
+  return (
+    <>
+      <Head kicker={<span className="role-chip" style={{ ['--role' as string]: ROLE_COLOR[w.role] }}>{ROLE_LABEL[w.role]}</span>} title={w.name} sub={`${w.breakSlot === 0 ? 'A' : 'B'}조 · 사번 ${site.cfg.code}-${w.id.slice(1)}`} onClose={onClose} />
+      <div className="pills">
+        <span className={`pill${onBreak ? ' pill--ok' : moving ? '' : ' pill--ink'}`}>{w.activity}</span>
+        {!w.visible && !onBreak && <span className="pill">실내</span>}
+      </div>
+      <KV
+        rows={[
+          ['위치', w.place || '—'],
+          ['담당', duty[w.role]],
+          ['검수 도크', w.dockId ? <Link sel={{ kind: 'dock', id: w.dockId }}>{w.dockId}</Link> : '—'],
+          ['휴게 시간', BREAK_TEXT[w.breakSlot]],
+          ['오늘 이동', `${(w.distance / 1000).toFixed(2)} km`],
+        ]}
+      />
+      {w.visible && (
+        <label className="toggle">
+          <input id="follow-toggle" type="checkbox" checked={follow} onChange={(e) => setFollow(e.target.checked)} />
+          <span>카메라로 따라가기</span>
+        </label>
+      )}
+    </>
+  )
+}
+
+const FAC_SUB: Record<FacilityId, string> = {
+  gate: '입차 정문 · 출차 후문 · 24시간 운영',
+  lot: '3개 레인 · 레인별 선입선출',
+  office: '3층 · 운영센터·휴게실',
+  shop: '지게차 정비·충전 지원',
+  parking: '직원 전용',
+}
+
+function FacilityView({ site, id, onClose }: { site: Site; id: FacilityId; onClose: () => void }) {
+  const t = world.time
+  const f = site.layout.facilities[id]
+  let body: ReactNode = null
+  if (id === 'gate') {
+    const inCampus = [...site.trucks.values()].filter((tr) => tr.phase !== 'enroute' && tr.phase !== 'gone').length
+    const guards = site.workers.filter((w) => w.role === 'guard')
+    body = (
+      <>
+        <div className="stat-row">
+          <div><span>오늘 입차</span><strong>{site.stats.gateIn}</strong></div>
+          <div><span>오늘 출차</span><strong>{site.stats.gateOut}</strong></div>
+          <div><span>구내 차량</span><strong>{inCampus}</strong></div>
+        </div>
+        <KV rows={[['근무 경비원', guards.map((g, i) => <span key={g.id}>{i > 0 && ', '}<Link sel={{ kind: 'worker', id: g.id }}>{g.name}</Link></span>)]]} />
+        <h4 className="insp-sec">최근 출입 기록</h4>
+        <ul className="mini-list">
+          {site.gateLog.slice(0, 10).map((g, i) => (
+            <li key={i}>
+              <span className="muted tnum">{fmtClock(g.t)}</span>
+              <span className={`dir dir--${g.kind === 'in' ? 'in' : 'out'}`}>{g.kind === 'in' ? '입문' : '출문'}</span>
+              {site.trucks.has(g.truckId) ? <Link sel={{ kind: 'truck', id: g.truckId }}>{g.plate}</Link> : <span>{g.plate}</span>}
+            </li>
+          ))}
+        </ul>
+      </>
+    )
+  } else if (id === 'lot') {
+    const H = site.layout.holding
+    const cap = H.laneZ.length * H.perLane
+    const yard = site.yardTrucks()
+    body = (
+      <>
+        <div className="prog-block">
+          <div className="prog-row">
+            <span>사용 중</span>
+            <strong>{yard.length} / {cap}대</strong>
+          </div>
+          <Progress value={yard.length} max={cap} tone={yard.length >= cap - 2 ? 'warn' : undefined} />
+        </div>
+        {site.lanes.map((q, li) => (
+          <div key={li}>
+            <h4 className="insp-sec">{li + 1}번 레인 <span className="muted">{q.length}대</span></h4>
+            {q.length ? (
+              <ul className="mini-list">
+                {q.map((id, i) => {
+                  const tr = site.trucks.get(id)!
+                  const s = site.shipOf(tr)
+                  return (
+                    <li key={id}>
+                      <span className="muted tnum">{i + 1}</span>
+                      <span className={`dir dir--${s.dir}`}>{DIR_LABEL[s.dir]}</span>
+                      <Link sel={{ kind: 'truck', id }}>{tr.plate}</Link>
+                      <span className="muted">{tr.phase === 'arriving' ? '진입 중' : `대기 ${fmtDur(site.dwellSoFar(tr, t))}`}</span>
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : (
+              <p className="muted small">비어 있음</p>
+            )}
+          </div>
+        ))}
+      </>
+    )
+  } else if (id === 'office') {
+    const inside = site.workers.filter((w) => !w.visible)
+    const onBreak = inside.filter((w) => w.activity === '휴게 중')
+    const working = inside.filter((w) => w.activity !== '휴게 중')
+    body = (
+      <>
+        <div className="stat-row">
+          <div><span>전체 인원</span><strong>{site.workers.length}</strong></div>
+          <div><span>현장</span><strong>{site.workers.length - inside.length}</strong></div>
+          <div><span>사무동 안</span><strong>{inside.length}</strong></div>
+        </div>
+        <h4 className="insp-sec">근무 중 <span className="muted">{working.length}명</span></h4>
+        <ul className="mini-list">
+          {working.map((w) => (
+            <li key={w.id}>
+              <span className="role-dot" style={{ background: ROLE_COLOR[w.role] }} />
+              <Link sel={{ kind: 'worker', id: w.id }}>{w.name}</Link>
+              <span className="muted">{w.activity}</span>
+            </li>
+          ))}
+        </ul>
+        <h4 className="insp-sec">휴게실 <span className="muted">{onBreak.length}명</span></h4>
+        {onBreak.length ? (
+          <ul className="mini-list">
+            {onBreak.map((w) => (
+              <li key={w.id}>
+                <span className="role-dot" style={{ background: ROLE_COLOR[w.role] }} />
+                <Link sel={{ kind: 'worker', id: w.id }}>{w.name}</Link>
+                <span className="muted">{ROLE_LABEL[w.role]}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted small">휴게 시간이 아닙니다. 다음 휴게: {BREAK_TEXT[0]}</p>
+        )}
+      </>
+    )
+  } else if (id === 'shop') {
+    const down = site.forklifts.filter((x) => x.state === 'down')
+    const charging = site.forklifts.filter((x) => x.state === 'charging' || x.state === 'toCharge')
+    const low = site.forklifts.filter((x) => x.battery < 35 && x.state !== 'charging' && x.state !== 'toCharge' && x.state !== 'down')
+    const list = (fs: Forklift[], extra: (x: Forklift) => string) =>
+      fs.length ? (
+        <ul className="mini-list">
+          {fs.map((x) => (
+            <li key={x.id}>
+              <Link sel={{ kind: 'forklift', id: x.id }}>{x.id}</Link>
+              <span className="muted">{extra(x)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted small">없음</p>
+      )
+    body = (
+      <>
+        <div className="stat-row">
+          <div><span>보유 지게차</span><strong>{site.forklifts.length}</strong></div>
+          <div><span>충전기</span><strong>{charging.filter((x) => x.state === 'charging').length}/{site.layout.chargers.length}</strong></div>
+          <div><span>정비 중</span><strong className={down.length ? 'tone-crit' : ''}>{down.length}</strong></div>
+        </div>
+        <h4 className="insp-sec">정비 중</h4>
+        {list(down, (x) => (x.downUntil ? `${fmtClock(x.downUntil)} 완료 예정` : ''))}
+        <h4 className="insp-sec">충전</h4>
+        {list(charging, (x) => `${x.battery.toFixed(0)}% · ${flStateLabel(x)}`)}
+        <h4 className="insp-sec">배터리 35% 미만</h4>
+        {list(low, (x) => `${x.battery.toFixed(0)}%`)}
+      </>
+    )
+  } else {
+    const cap = site.parked.length
+    const used = site.parked.filter(Boolean).length
+    body = (
+      <div className="prog-block">
+        <div className="prog-row">
+          <span>주차</span>
+          <strong>{used} / {cap}면</strong>
+        </div>
+        <Progress value={used} max={cap} />
+        <p className="muted small">근무 인원 {site.workers.length}명 · 지게차 운전원 {site.forklifts.length}명</p>
+      </div>
+    )
+  }
+  return (
+    <>
+      <Head kicker="시설" title={f.name} sub={FAC_SUB[id]} onClose={onClose} />
+      {body}
+    </>
+  )
+}
+
 export function Inspector() {
   useUi((s) => s.tick)
   const sel = useUi((s) => s.sel)
@@ -471,6 +688,11 @@ export function Inspector() {
     } else if (sel.kind === 'bay') {
       const b = site.bays[Number(sel.id)]
       body = b ? <BayView site={site} b={b} onClose={close} /> : <Gone onClose={close} />
+    } else if (sel.kind === 'worker') {
+      const w = site.workers.find((x) => x.id === sel.id)
+      body = w ? <WorkerView site={site} w={w} onClose={close} /> : <Gone onClose={close} />
+    } else if (sel.kind === 'facility') {
+      body = <FacilityView site={site} id={sel.id as FacilityId} onClose={close} />
     }
   }
   return <aside className="insp">{body}</aside>

@@ -23,7 +23,8 @@ function goodsColor(mode: ViewMode, stock: number, shade: number, out: THREE.Col
 }
 
 export function Racks({ site }: { site: Site }) {
-  const { rows } = site.layout
+  const Lg = site.layout
+  const { rows } = Lg
   const bays = site.bays
   const select = useUi((s) => s.select)
   const setHover = useUi((s) => s.setHover)
@@ -31,13 +32,13 @@ export function Racks({ site }: { site: Site }) {
   const uprights = useMemo(() => {
     const arr: [number, number][] = []
     for (const r of rows)
-      for (let half = 0; half < 2; half++)
-        for (let i = 0; i <= L.BAYS_PER_HALF; i++) {
-          const x = (half === 0 ? -22.8 : 2) + i * L.BAY_W
+      for (const sx of Lg.sectionX0)
+        for (let i = 0; i <= L.BAYS_PER_SECTION; i++) {
+          const x = sx + i * L.BAY_W
           arr.push([x, r.z - 0.56], [x, r.z + 0.56])
         }
     return arr
-  }, [rows])
+  }, [rows, Lg])
 
   const beams = useMemo(() => {
     const arr: [number, number, number][] = []

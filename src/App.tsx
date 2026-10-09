@@ -7,6 +7,7 @@ import { Timeline } from './ui/Timeline'
 import { useUi } from './store'
 import { ModeLegend, StageToolbar, ToastView } from './ui/StageToolbar'
 import { Search } from './ui/Search'
+import { Minimap } from './ui/Minimap'
 
 export default function App() {
   const bump = useUi((s) => s.bump)
@@ -32,6 +33,7 @@ export default function App() {
           <Scene />
           <StageToolbar />
           <ModeLegend />
+          <Minimap />
           <ToastView />
           <div className="stage-hint" aria-hidden="true">
             <span>

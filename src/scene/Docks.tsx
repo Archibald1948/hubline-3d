@@ -35,12 +35,12 @@ export function Docks({ site }: { site: Site }) {
         const sel = { kind: 'dock' as const, id: d.id }
         return (
           <group key={d.id}>
-            <mesh position={[d.x + 1.4, 5.05, L.WALL.z1 + 0.2]}>
+            <mesh position={[d.x + 1.4, 5.05, L.DOCK_WALL_Z + 0.2]}>
               <boxGeometry args={[0.5, 0.28, 0.12]} />
               <meshBasicMaterial ref={(m) => void (mats.current[i] = m)} color={LIGHT[st]} />
             </mesh>
             <mesh
-              position={[d.x, 2.3, L.WALL.z1]}
+              position={[d.x, 2.3, L.DOCK_WALL_Z]}
               onClick={(e) => {
                 e.stopPropagation()
                 select(sel)
@@ -70,7 +70,7 @@ export function Docks({ site }: { site: Site }) {
               <planeGeometry args={[3.9, 3.9]} />
               <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>
-            <Html position={[d.x, 6.3, L.WALL.z1]} center zIndexRange={[12, 0]}>
+            <Html position={[d.x, 6.3, L.DOCK_WALL_Z]} center zIndexRange={[12, 0]}>
               <button type="button" className={`dock-tag dock-tag--${st}`} onClick={() => select(sel)}>
                 <span>{d.id}</span>
                 {pct != null && <em>{pct}%</em>}

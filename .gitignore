@@ -4,3 +4,4 @@ dist-single
 .vite
 .DS_Store
 *.log
+*.tsbuildinfo

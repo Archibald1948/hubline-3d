@@ -1,117 +1,376 @@
-// 건축 모형 느낌의 주변 요소: 흰 구형 나무, 사무동, 직원 주차장
+// 캠퍼스 주변: 나무(호버하면 흔들림), 울타리, 사무동·정비동·경비실, 주차장, 인근 물류단지, 게이트 차단기
 import { useLayoutEffect, useMemo, useRef } from 'react'
+import { useFrame, type ThreeEvent } from '@react-three/fiber'
+import { Html } from '@react-three/drei'
 import * as THREE from 'three'
+import * as L from '../sim/layout'
+import type { Site } from '../sim/engine'
 import { Rng } from '../sim/rng'
+import { useUi, world } from '../store'
 import { P } from './palette'
 import { nightMats } from './nightMats'
+import { box, cyl, merged, vcMatMatte, type Part } from './merge'
 
 const tmp = new THREE.Object3D()
 
-export function Surroundings() {
-  const trees = useMemo(() => {
-    const r = new Rng(7)
-    const out: { x: number; z: number; s: number }[] = []
-    const add = (x: number, z: number) => out.push({ x: x + r.range(-0.8, 0.8), z: z + r.range(-0.8, 0.8), s: r.range(0.75, 1.25) })
-    for (let x = -60; x <= 90; x += 6) add(x, -31)
-    for (let z = -26; z <= 8; z += 6) {
-      add(-38, z)
-      add(88, z)
+interface Tree {
+  x: number
+  z: number
+  s: number
+  kind: 0 | 1
+}
+
+function inRect(x: number, z: number, r: { x0: number; x1: number; z0: number; z1: number }, pad = 0) {
+  return x > r.x0 - pad && x < r.x1 + pad && z > r.z0 - pad && z < r.z1 + pad
+}
+
+function useTrees(site: Site): Tree[] {
+  return useMemo(() => {
+    const Lg = site.layout
+    const C = Lg.campus
+    const r = new Rng(site.cfg.seed * 7 + 3)
+    const out: Tree[] = []
+    const add = (x: number, z: number, s = r.range(0.8, 1.35)) => out.push({ x: x + r.range(-0.8, 0.8), z: z + r.range(-0.8, 0.8), s, kind: r.chance(0.3) ? 1 : 0 })
+    // 울타리 안쪽 가로수
+    for (let x = C.x0 + 4; x < C.x1 - 4; x += 7) add(x, C.z0 + 3.5)
+    for (let z = C.z0 + 9; z < 27; z += 7) {
+      add(C.x0 + 3.5, z)
+      if (!inRect(C.x1 - 3.5, z, { x0: Lg.facilities.shop.x - 12, x1: Lg.facilities.shop.x + 12, z0: Lg.facilities.shop.z - 9, z1: Lg.facilities.shop.z + 9 })) add(C.x1 - 3.5, z)
     }
-    for (let x = -150; x <= 150; x += 9) if (x < -36 || x > 60) add(x, 47)
-    for (let x = -96; x <= -44; x += 8) add(x, 20)
+    for (let x = C.x0 + 4; x < C.x1 - 4; x += 8) add(x, 45.5)
+    // 사무동 앞 정원
+    const o = Lg.facilities.office
+    for (let i = 0; i < 5; i++) add(o.x - o.w / 2 + 2 + i * 3.6, o.z - o.d / 2 - 3.5, r.range(0.7, 1))
+    // 바깥 숲: 군집
+    const avoid = { x0: C.x0 - 6, x1: C.x1 + 6, z0: C.z0 - 6, z1: 50 }
+    for (let c = 0; c < 46; c++) {
+      const cx = r.range(C.x0 - 160, C.x1 + 160)
+      const cz = r.range(C.z0 - 110, 170)
+      const n = r.int(5, 13)
+      for (let i = 0; i < n; i++) {
+        const x = cx + r.range(-14, 14)
+        const z = cz + r.range(-14, 14)
+        if (inRect(x, z, avoid) || (z > 27 && z < 48)) continue
+        if (z > 60 && z < 150 && Math.abs(x) < 360 && Math.abs((x + 400) % 130 - 65) < 52) continue // 인근 건물 자리
+        add(x, z, r.range(0.9, 1.6))
+      }
+    }
     return out
-  }, [])
-  const crown = useRef<THREE.InstancedMesh>(null)
+  }, [site])
+}
+
+function Trees({ site }: { site: Site }) {
+  const trees = useTrees(site)
+  const crownR = useRef<THREE.InstancedMesh>(null)
+  const crownC = useRef<THREE.InstancedMesh>(null)
   const trunk = useRef<THREE.InstancedMesh>(null)
+  const wobble = useRef(new Map<number, number>())
+  const roundIdx = useMemo(() => trees.map((t, i) => (t.kind === 0 ? i : -1)).filter((i) => i >= 0), [trees])
+  const coneIdx = useMemo(() => trees.map((t, i) => (t.kind === 1 ? i : -1)).filter((i) => i >= 0), [trees])
+
+  const place = (ti: number, sway: number) => {
+    const t = trees[ti]
+    const isCone = t.kind === 1
+    const list = isCone ? coneIdx : roundIdx
+    const k = list.indexOf(ti)
+    tmp.position.set(t.x, (isCone ? 3.2 : 2.7) * t.s, t.z)
+    tmp.rotation.set(sway * 0.5, 0, sway)
+    tmp.scale.setScalar(t.s)
+    tmp.updateMatrix()
+    ;(isCone ? crownC : crownR).current!.setMatrixAt(k, tmp.matrix)
+  }
+
   useLayoutEffect(() => {
     trees.forEach((t, i) => {
-      tmp.position.set(t.x, 2.6 * t.s, t.z)
-      tmp.scale.setScalar(t.s)
-      tmp.updateMatrix()
-      crown.current!.setMatrixAt(i, tmp.matrix)
+      place(i, 0)
       tmp.position.set(t.x, 0.9 * t.s, t.z)
+      tmp.rotation.set(0, 0, 0)
+      tmp.scale.setScalar(t.s)
       tmp.updateMatrix()
       trunk.current!.setMatrixAt(i, tmp.matrix)
     })
-    crown.current!.instanceMatrix.needsUpdate = true
-    trunk.current!.instanceMatrix.needsUpdate = true
+    for (const m of [crownR, crownC, trunk]) {
+      m.current!.instanceMatrix.needsUpdate = true
+      m.current!.computeBoundingSphere()
+    }
+    // place는 trees·인덱스만 사용
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trees])
 
-  const cars = useMemo(() => {
-    const r = new Rng(3)
-    const out: { x: number; z: number; on: boolean; c: string }[] = []
-    for (let i = 0; i < 14; i++) for (let j = 0; j < 2; j++) out.push({ x: 48 + i * 2.6, z: -12 + j * 6.4, on: r.chance(0.72), c: r.pick(['#1b1b1b', '#f6f6f4', '#9a9a95', '#d9d9d5', '#4a4a47']) })
-    return out
-  }, [])
+  useFrame(() => {
+    if (!wobble.current.size) return
+    const now = performance.now() / 1000
+    for (const [ti, t0] of wobble.current) {
+      const u = now - t0
+      const sway = u > 1.6 ? 0 : Math.sin(u * 14) * 0.22 * Math.exp(-u * 2.4)
+      place(ti, sway)
+      if (u > 1.6) wobble.current.delete(ti)
+    }
+    crownR.current!.instanceMatrix.needsUpdate = true
+    crownC.current!.instanceMatrix.needsUpdate = true
+  })
+
+  const shake = (list: number[]) => (e: ThreeEvent<PointerEvent | MouseEvent>) => {
+    if (e.instanceId == null) return
+    const ti = list[e.instanceId]
+    const prev = wobble.current.get(ti)
+    const now = performance.now() / 1000
+    if (prev == null || now - prev > 0.8) wobble.current.set(ti, now)
+  }
 
   return (
     <group>
-      <instancedMesh ref={crown} args={[undefined, undefined, trees.length]} castShadow receiveShadow>
-        <icosahedronGeometry args={[1.6, 1]} />
+      <instancedMesh ref={crownR} args={[undefined, undefined, roundIdx.length]} castShadow receiveShadow onPointerOver={shake(roundIdx)} onClick={shake(roundIdx)}>
+        <icosahedronGeometry args={[1.7, 1]} />
         <meshStandardMaterial color={P.tree} roughness={0.95} flatShading />
       </instancedMesh>
+      <instancedMesh ref={crownC} args={[undefined, undefined, coneIdx.length]} castShadow receiveShadow onPointerOver={shake(coneIdx)} onClick={shake(coneIdx)}>
+        <coneGeometry args={[1.5, 4.2, 7]} />
+        <meshStandardMaterial color="#EDEDE8" roughness={0.95} flatShading />
+      </instancedMesh>
       <instancedMesh ref={trunk} args={[undefined, undefined, trees.length]} castShadow>
-        <cylinderGeometry args={[0.12, 0.16, 1.8, 6]} />
+        <cylinderGeometry args={[0.12, 0.17, 1.8, 6]} />
         <meshStandardMaterial color={P.trunk} roughness={1} />
       </instancedMesh>
+    </group>
+  )
+}
 
-      {/* 사무동 (2층) */}
-      <group position={[36, 0, -18]}>
-        <mesh position={[0, 0.06, 0]} receiveShadow>
-          <boxGeometry args={[14, 0.12, 9]} />
-          <meshStandardMaterial color={P.slab} />
-        </mesh>
-        <mesh position={[0, 3.6, 0]} castShadow receiveShadow>
-          <boxGeometry args={[13, 7, 8]} />
-          <meshStandardMaterial color={P.wall} roughness={0.85} />
-        </mesh>
-        {[1.9, 5.3].map((y) => (
-          <mesh key={y} position={[0, y, 4.02]} material={nightMats.window}>
-            <boxGeometry args={[12, 1.3, 0.05]} />
-          </mesh>
-        ))}
-        {[1.9, 5.3].map((y) => (
-          <mesh key={`w${y}`} position={[-6.52, y, 0]} material={nightMats.window}>
-            <boxGeometry args={[0.05, 1.3, 6.5]} />
-          </mesh>
-        ))}
-        <mesh position={[0, 7.18, 0]} castShadow>
-          <boxGeometry args={[13.4, 0.36, 8.4]} />
-          <meshStandardMaterial color={P.frame} />
-        </mesh>
-      </group>
+function Fence({ site }: { site: Site }) {
+  const C = site.layout.campus
+  const posts = useMemo(() => {
+    const out: [number, number][] = []
+    const gapZ = (z: number) => z > 29.8 && z < 43.8
+    for (let x = C.x0; x <= C.x1; x += 3) out.push([x, C.z0], [x, C.z1])
+    for (let z = C.z0 + 3; z < C.z1; z += 3) {
+      if (!gapZ(z)) out.push([C.x0, z], [C.x1, z])
+    }
+    return out
+  }, [C])
+  const ref = useRef<THREE.InstancedMesh>(null)
+  useLayoutEffect(() => {
+    posts.forEach(([x, z], i) => {
+      tmp.position.set(x, 1.0, z)
+      tmp.rotation.set(0, 0, 0)
+      tmp.scale.set(1, 1, 1)
+      tmp.updateMatrix()
+      ref.current!.setMatrixAt(i, tmp.matrix)
+    })
+    ref.current!.instanceMatrix.needsUpdate = true
+    ref.current!.computeBoundingSphere()
+  }, [posts])
+  const rails = useMemo(() => {
+    const w = C.x1 - C.x0
+    const segs: Part[] = []
+    for (const y of [0.55, 1.8]) {
+      segs.push({ geo: box(w, 0.05, 0.05), pos: [(C.x0 + C.x1) / 2, y, C.z0], color: P.fence })
+      segs.push({ geo: box(w, 0.05, 0.05), pos: [(C.x0 + C.x1) / 2, y, C.z1], color: P.fence })
+      for (const x of [C.x0, C.x1]) {
+        segs.push({ geo: box(0.05, 0.05, 29.8 - C.z0), pos: [x, y, (C.z0 + 29.8) / 2], color: P.fence })
+        segs.push({ geo: box(0.05, 0.05, C.z1 - 43.8), pos: [x, y, (43.8 + C.z1) / 2], color: P.fence })
+      }
+    }
+    return segs
+  }, [C])
+  return (
+    <group>
+      <instancedMesh ref={ref} args={[undefined, undefined, posts.length]} castShadow>
+        <boxGeometry args={[0.1, 2.0, 0.1]} />
+        <meshStandardMaterial color={P.fence} roughness={0.7} />
+      </instancedMesh>
+      <mesh geometry={merged(`rails-${site.cfg.id}`, () => rails)} material={vcMatMatte} />
+    </group>
+  )
+}
 
-      {/* 직원 주차장 */}
-      <mesh position={[65, -0.015, -8.8]} rotation-x={-Math.PI / 2} receiveShadow>
-        <planeGeometry args={[42, 15]} />
+// 정적 건물들을 사이트별 지오메트리 하나로
+function campusStatic(site: Site) {
+  return merged(`campus-${site.cfg.id}`, () => {
+    const Lg = site.layout
+    const o = Lg.facilities.office
+    const sh = Lg.facilities.shop
+    const g = Lg.facilities.gate
+    const parts: Part[] = []
+    // 사무동 (3층)
+    parts.push({ geo: box(o.w, o.h, o.d), pos: [o.x, o.h / 2, o.z], color: P.wall })
+    parts.push({ geo: box(o.w + 0.4, 0.5, o.d + 0.4), pos: [o.x, o.h + 0.25, o.z], color: P.frame })
+    parts.push({ geo: box(3.6, 0.2, 3.2), pos: [o.x + o.w / 2 + 1.6, 3.1, o.z + 2], color: P.frame })
+    parts.push({ geo: box(0.12, 3.0, 0.12), pos: [o.x + o.w / 2 + 3.2, 1.5, o.z + 0.6], color: P.frame })
+    parts.push({ geo: box(0.12, 3.0, 0.12), pos: [o.x + o.w / 2 + 3.2, 1.5, o.z + 3.4], color: P.frame })
+    for (let f = 0; f < 3; f++) parts.push({ geo: box(0.3, 0.2, 2.2), pos: [o.x + o.w / 2 + 0.05, 2.6 + f * 3.4, o.z + 2], color: '#2A2A2A' })
+    // 정비동
+    parts.push({ geo: box(sh.w, sh.h, sh.d), pos: [sh.x, sh.h / 2, sh.z], color: '#F2F2EF' })
+    parts.push({ geo: box(sh.w + 0.4, 0.4, sh.d + 0.4), pos: [sh.x, sh.h + 0.2, sh.z], color: P.frame })
+    for (let i = 0; i < 3; i++) parts.push({ geo: box(4.2, 4.6, 0.1), pos: [sh.x - sh.w / 2 + 3.6 + i * 6.4, 2.3, sh.z + sh.d / 2 + 0.03], color: '#4A4A47' })
+    parts.push({ geo: cyl(2.6, 7, 20), pos: [sh.x + sh.w / 2 + 5, 3.5, sh.z - 3], color: '#E2E2DE' })
+    parts.push({ geo: box(2.2, 1.8, 1.6), pos: [sh.x + sh.w / 2 + 5, 0.9, sh.z + 3.5], color: '#9A9A95' })
+    // 정문 경비실 + 캐노피
+    parts.push({ geo: box(g.w, g.h, g.d), pos: [g.x, g.h / 2, g.z], color: P.wall })
+    parts.push({ geo: box(g.w + 0.8, 0.2, g.d + 0.8), pos: [g.x, g.h + 0.1, g.z], color: P.frame })
+    parts.push({ geo: box(0.35, 1.1, 0.35), pos: [g.x + 1.6, 0.55, L.LANE_IN - 3.2], color: P.frame })
+    for (const z of [30.6, 43]) parts.push({ geo: box(0.4, 6.4, 0.4), pos: [g.x + 6, 3.2, z], color: P.frame })
+    parts.push({ geo: box(1.2, 0.8, 13), pos: [g.x + 6, 6.6, 36.8], color: P.frame })
+    // 후문(출구) 경비실
+    parts.push({ geo: box(2.6, 2.8, 2.6), pos: [Lg.exitGateX, 1.4, 45.4], color: P.wall })
+    parts.push({ geo: box(3.2, 0.2, 3.2), pos: [Lg.exitGateX, 2.9, 45.4], color: P.frame })
+    parts.push({ geo: box(0.35, 1.1, 0.35), pos: [Lg.exitGateX - 1.6, 0.55, 42.6], color: P.frame })
+    // 인근 물류단지 (원경)
+    const r = new Rng(site.cfg.seed + 99)
+    for (let x = -400; x < 400; x += 130) {
+      const w = r.range(70, 104)
+      const d = r.range(46, 70)
+      const h = r.range(9, 14)
+      parts.push({ geo: box(w, h, d), pos: [x + 65, h / 2, 105], color: P.neighbor })
+      parts.push({ geo: box(w + 0.4, 0.4, d + 0.4), pos: [x + 65, h + 0.2, 105], color: '#CFCFCB' })
+      for (let i = 0; i < Math.floor(w / 6); i++) parts.push({ geo: box(3, 3.6, 0.1), pos: [x + 65 - w / 2 + 4 + i * 6, 1.8, 105 - d / 2 - 0.05], color: '#9C9C97' })
+    }
+    for (const [x, z] of [
+      [Lg.campus.x0 - 120, Lg.campus.z0 + 20],
+      [Lg.campus.x1 + 110, Lg.campus.z0 + 10],
+    ]) {
+      const h = r.range(10, 16)
+      parts.push({ geo: box(80, h, 60), pos: [x, h / 2, z], color: P.neighbor })
+    }
+    return parts
+  })
+}
+
+function campusGlass(site: Site) {
+  return merged(`campus-glass-${site.cfg.id}`, () => {
+    const o = site.layout.facilities.office
+    const parts: Part[] = []
+    for (let f = 0; f < 3; f++) {
+      const y = 1.9 + f * 3.4
+      parts.push({ geo: box(o.w - 1.2, 1.5, 0.06), pos: [o.x, y, o.z + o.d / 2 + 0.01], color: '#fff' })
+      parts.push({ geo: box(o.w - 1.2, 1.5, 0.06), pos: [o.x, y, o.z - o.d / 2 - 0.01], color: '#fff' })
+      parts.push({ geo: box(0.06, 1.5, o.d - 1.2), pos: [o.x - o.w / 2 - 0.01, y, o.z], color: '#fff' })
+      parts.push({ geo: box(0.06, 1.5, o.d - 4.4), pos: [o.x + o.w / 2 + 0.01, y, o.z - 1.6], color: '#fff' })
+    }
+    const g = site.layout.facilities.gate
+    parts.push({ geo: box(g.w + 0.02, 1.1, g.d - 0.6), pos: [g.x, 1.9, g.z], color: '#fff' })
+    return parts
+  })
+}
+
+function parkingCars(site: Site) {
+  return merged(`cars-${site.cfg.id}`, () => {
+    const p = site.layout.facilities.parking
+    const r = new Rng(site.cfg.seed + 11)
+    let k = 0
+    const colors = ['#1B1B1B', '#F6F6F4', '#9A9A95', '#D9D9D5', '#4A4A47', '#2F4C7D']
+    const parts: Part[] = []
+    const cols = Math.floor((p.w - 2) / 2.7)
+    for (const zRow of [p.z - p.d / 2 + 3.2, p.z + p.d / 2 - 3.2]) {
+      for (let i = 0; i < cols; i++) {
+        const x = p.x - p.w / 2 + 2.4 + i * 2.7
+        parts.push({ geo: box(0.1, 0.02, 4.6), pos: [x - 1.35, 0.01, zRow], color: P.lane })
+        if (!site.parked[k++]) continue
+        const c = r.pick(colors)
+        parts.push({ geo: box(1.75, 0.72, 4.2), pos: [x, 0.56, zRow], color: c })
+        parts.push({ geo: box(1.52, 0.55, 2.2), pos: [x, 1.18, zRow - 0.15], color: c === '#1B1B1B' ? '#2C2C2C' : P.glass })
+      }
+    }
+    return parts
+  })
+}
+
+function Barrier({ x, pivotZ, dir, lane, site }: { x: number; pivotZ: number; dir: 1 | -1; lane: 'in' | 'out'; site: Site }) {
+  const arm = useRef<THREE.Group>(null)
+  const a = useRef(0)
+  useFrame((_, dt) => {
+    let open = false
+    for (const tr of site.trucks.values()) {
+      if (lane === 'in' ? tr.phase !== 'arriving' : tr.phase !== 'departing') continue
+      const p = site.truckPose(tr, world.time)
+      if (Math.abs(p.x - x) < 26) {
+        open = true
+        break
+      }
+    }
+    a.current += ((open ? 1.35 : 0) - a.current) * Math.min(1, dt * 4)
+    if (arm.current) arm.current.rotation.x = -dir * a.current
+  })
+  return (
+    <group ref={arm} position={[x, 1.05, pivotZ]}>
+      <mesh position={[0, 0, (dir * 6.4) / 2]} castShadow>
+        <boxGeometry args={[0.14, 0.14, 6.4]} />
+        <meshStandardMaterial color="#F4F4F2" />
+      </mesh>
+      {[1, 3, 5].map((k) => (
+        <mesh key={k} position={[0, 0, dir * (k + 0.5)]}>
+          <boxGeometry args={[0.16, 0.16, 0.7]} />
+          <meshStandardMaterial color={P.crit} />
+        </mesh>
+      ))}
+    </group>
+  )
+}
+
+function FacilityHits({ site }: { site: Site }) {
+  useUi((s) => s.tick)
+  const select = useUi((s) => s.select)
+  const setHover = useUi((s) => s.setHover)
+  const F = site.layout.facilities
+  const yard = site.yardTrucks().length
+  const cap = site.layout.holding.laneZ.length * site.layout.holding.perLane
+  const items: { id: L.FacilityId; h: number; tag: string }[] = [
+    { id: 'office', h: F.office.h, tag: '사무동' },
+    { id: 'shop', h: F.shop.h, tag: '정비동' },
+    { id: 'gate', h: 4.2, tag: '정문' },
+    { id: 'lot', h: 1.2, tag: `대기장 ${yard}/${cap}` },
+    { id: 'parking', h: 1.2, tag: '주차장' },
+  ]
+  return (
+    <group>
+      {items.map(({ id, h, tag }) => {
+        const f = F[id]
+        const sel = { kind: 'facility' as const, id }
+        return (
+          <group key={id}>
+            <mesh
+              position={[f.x, Math.max(h, 0.4) / 2, f.z]}
+              onClick={(e) => {
+                e.stopPropagation()
+                select(sel)
+              }}
+              onPointerOver={(e) => {
+                e.stopPropagation()
+                setHover(sel)
+              }}
+              onPointerOut={() => setHover(null)}
+            >
+              <boxGeometry args={[f.w + 0.4, Math.max(h, 0.4), f.d + 0.4]} />
+              <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+            </mesh>
+            <Html position={[f.x, h + 2.2, f.z]} center zIndexRange={[11, 0]}>
+              <button type="button" className="fac-tag" onClick={() => select(sel)}>
+                {tag}
+              </button>
+            </Html>
+          </group>
+        )
+      })}
+    </group>
+  )
+}
+
+export function Surroundings({ site }: { site: Site }) {
+  const Lg = site.layout
+  const p = Lg.facilities.parking
+  return (
+    <group>
+      <Trees site={site} />
+      <Fence site={site} />
+      <mesh geometry={campusStatic(site)} material={vcMatMatte} castShadow receiveShadow />
+      <mesh geometry={campusGlass(site)} material={nightMats.window} />
+      <mesh position={[p.x, -0.012, p.z]} rotation-x={-Math.PI / 2} receiveShadow>
+        <planeGeometry args={[p.w, p.d]} />
         <meshStandardMaterial color={P.yard} roughness={1} />
       </mesh>
-      {Array.from({ length: 15 }, (_, i) => (
-        <group key={i}>
-          <mesh position={[46.7 + i * 2.6, 0.0, -12]} rotation-x={-Math.PI / 2}>
-            <planeGeometry args={[0.1, 4.4]} />
-            <meshBasicMaterial color={P.lane} />
-          </mesh>
-          <mesh position={[46.7 + i * 2.6, 0.0, -5.6]} rotation-x={-Math.PI / 2}>
-            <planeGeometry args={[0.1, 4.4]} />
-            <meshBasicMaterial color={P.lane} />
-          </mesh>
-        </group>
-      ))}
-      {cars
-        .filter((c) => c.on)
-        .map((c, i) => (
-          <group key={i} position={[c.x, 0, c.z]}>
-            <mesh position={[0, 0.55, 0]} castShadow>
-              <boxGeometry args={[1.75, 0.75, 4.2]} />
-              <meshStandardMaterial color={c.c} roughness={0.5} />
-            </mesh>
-            <mesh position={[0, 1.1, -0.15]} castShadow>
-              <boxGeometry args={[1.5, 0.55, 2.2]} />
-              <meshStandardMaterial color={c.c === '#1b1b1b' ? '#2c2c2c' : P.glass} roughness={0.3} />
-            </mesh>
-          </group>
-        ))}
+      <mesh geometry={parkingCars(site)} material={vcMatMatte} castShadow />
+      <Barrier site={site} x={Lg.gateX + 1.6} pivotZ={L.LANE_IN - 3.2} dir={1} lane="in" />
+      <Barrier site={site} x={Lg.exitGateX - 1.6} pivotZ={42.6} dir={-1} lane="out" />
+      <FacilityHits site={site} />
     </group>
   )
 }

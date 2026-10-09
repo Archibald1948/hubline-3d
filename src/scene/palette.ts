@@ -26,4 +26,10 @@ export const P = {
   tree: '#F4F4F1',
   trunk: '#9A9A95',
   glassWall: '#B9C0C6',
+  road: '#BFBFBA',
+  apron: '#D3D3CF',
+  paving: '#DCDCD8',
+  fence: '#5A5A56',
+  neighbor: '#E4E4E0',
+  skin: '#E8C4A0',
 } as const

@@ -48,10 +48,10 @@ export function SidePanel() {
         </section>
 
         <section className="kpi">
-          <h3>야드 대기</h3>
-          <p className={`kpi-num${k.yardCount >= 4 ? ' tone-warn' : ''}`}>
+          <h3>트럭 대기장</h3>
+          <p className={`kpi-num${k.yardCount >= k.yardCap - 3 ? ' tone-warn' : ''}`}>
             {k.yardCount}
-            <small>대</small>
+            <small> / {k.yardCap}대</small>
           </p>
           <p className="kpi-sub">현재 평균 {k.avgWaitMin.toFixed(0)}분</p>
           <p className="kpi-sub">도착→접안 평균 {k.avgDwellMin.toFixed(0)}분</p>
@@ -80,6 +80,15 @@ export function SidePanel() {
             <i style={{ width: `${k.fillPct}%` }} />
           </div>
           <p className="kpi-sub">랙 적재율 {k.fillPct.toFixed(0)}%</p>
+        </section>
+
+        <section className="kpi">
+          <h3>현장 인원</h3>
+          <p className="kpi-num">
+            {k.onFloor}
+            <small> / {k.crew}명</small>
+          </p>
+          <p className="kpi-sub">{k.onBreak ? `휴게 ${k.onBreak}명 · ` : ''}사무동 {k.crew - k.onFloor - k.onBreak}명</p>
         </section>
 
         <section className="kpi">

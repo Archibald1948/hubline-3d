@@ -1,6 +1,6 @@
 // 통합 검색 (⌘K / Ctrl+K / '/') — 전 사이트 대상
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Sel } from '../sim/engine'
+import { ROLE_LABEL, type Sel } from '../sim/engine'
 import { useUi, world } from '../store'
 import { DIR_LABEL, DOCK_STATE_LABEL, flStateLabel, shipStatusLabel, truckPhaseLabel } from './labels'
 
@@ -32,6 +32,8 @@ function buildIndex(): Item[] {
     for (const b of site.bays) push({ kind: 'bay', id: String(b.idx) }, '로케이션', `${b.code} ${b.name}`, `SKU ${b.sku} · ${b.stock}/8 PLT`, b.sku)
     for (const d of site.docks) push({ kind: 'dock', id: d.id }, '도크', `도크 ${d.id}`, DOCK_STATE_LABEL[site.dockState(d)], d.id)
     for (const f of site.forklifts) push({ kind: 'forklift', id: f.id }, '지게차', f.id, `${f.operator} · ${flStateLabel(f)}`, f.operator)
+    for (const w of site.workers) push({ kind: 'worker', id: w.id }, '작업자', w.name, `${ROLE_LABEL[w.role]} · ${w.activity}`, ROLE_LABEL[w.role])
+    for (const f of Object.values(site.layout.facilities)) push({ kind: 'facility', id: f.id }, '시설', f.name, site.cfg.name, f.id === 'lot' ? '트럭 대기' : f.id === 'gate' ? '게이트 경비실 입차 출차' : '')
   }
   return out
 }
@@ -115,7 +117,7 @@ export function Search() {
             ref={input}
             autoFocus
             value={q}
-            placeholder="차량번호, 출입고 ID, SKU, 품목, 도크, 지게차·운전원"
+            placeholder="차량번호, 출입고 ID, SKU, 품목, 도크, 지게차, 작업자, 시설"
             autoComplete="off"
             spellCheck={false}
             onChange={(e) => setQ(e.target.value)}

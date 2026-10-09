@@ -1,5 +1,5 @@
 // 시뮬레이션 시각에 연동되는 낮·밤 조명 + 가로등/벽등
-import { useMemo, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useFrame, useThree } from '@react-three/fiber'
 import * as THREE from 'three'
 import * as L from '../sim/layout'
@@ -7,6 +7,7 @@ import type { Site } from '../sim/engine'
 import { useUi, world } from '../store'
 import { P } from './palette'
 import { nightMats } from './nightMats'
+import { box, cyl, merged, vcMat } from './merge'
 
 const sstep = (a: number, b: number, x: number) => {
   const t = Math.max(0, Math.min(1, (x - a) / (b - a)))
@@ -32,12 +33,28 @@ const C = {
   lampOn: new THREE.Color('#fff1d0'),
 }
 
-export function Lighting() {
+export function Lighting({ site }: { site: Site }) {
   const hemi = useRef<THREE.HemisphereLight>(null)
   const sun = useRef<THREE.DirectionalLight>(null)
   const scene = useThree((s) => s.scene)
   const tmp = useMemo(() => new THREE.Color(), [])
   const dayRef = useRef(-1)
+  const Lg = site.layout
+  const half = Math.max(Lg.width / 2 + 45, 70)
+
+  useEffect(() => {
+    const s = sun.current
+    if (!s) return
+    const cam = s.shadow.camera
+    cam.left = -half
+    cam.right = half
+    cam.top = half * 0.8
+    cam.bottom = -half * 0.8
+    cam.far = 420
+    cam.updateProjectionMatrix()
+    s.target.position.set(0, 0, (Lg.wall.z0 + 30) / 2)
+    s.target.updateMatrixWorld()
+  }, [half, Lg])
 
   useFrame(() => {
     const mode = useUi.getState().lightMode
@@ -54,15 +71,15 @@ export function Lighting() {
       const s = sun.current
       if (day > 0.02 && mode === 'auto') {
         const th = Math.max(0.2, Math.min(Math.PI - 0.2, ((h - 6) / 12) * Math.PI))
-        s.position.set(Math.cos(th) * 90, 28 + Math.sin(th) * 70, 52)
+        s.position.set(Math.cos(th) * 150, 50 + Math.sin(th) * 120, 90 + (Lg.wall.z0 + 30) / 2)
         const dusk = 1 - Math.sin(th)
         tmp.copy(C.sunDay).lerp(C.sunDusk, dusk * 0.8)
         s.color.copy(C.moon).lerp(tmp, day)
       } else if (mode === 'day') {
-        s.position.set(42, 86, 52)
+        s.position.set(70, 150, 90)
         s.color.copy(C.sunDay)
       } else {
-        s.position.set(-46, 74, 38)
+        s.position.set(-80, 130, 60)
         s.color.copy(C.moon)
       }
       s.intensity = 0.38 + 1.72 * day
@@ -85,14 +102,14 @@ export function Lighting() {
         castShadow
         position={[42, 86, 52]}
         intensity={2.1}
-        shadow-mapSize-width={2048}
-        shadow-mapSize-height={2048}
+        shadow-mapSize-width={4096}
+        shadow-mapSize-height={4096}
         shadow-camera-left={-80}
         shadow-camera-right={80}
         shadow-camera-top={60}
         shadow-camera-bottom={-60}
         shadow-camera-near={10}
-        shadow-camera-far={260}
+        shadow-camera-far={420}
         shadow-bias={-0.0004}
         shadow-normalBias={0.05}
       />
@@ -101,51 +118,46 @@ export function Lighting() {
 }
 
 export function YardLights({ site }: { site: Site }) {
-  const road = useMemo(() => {
+  const Lg = site.layout
+  const key = site.cfg.id
+  const poles = useMemo(() => {
     const xs: number[] = []
-    for (let x = -100; x <= 120; x += 22) xs.push(x)
+    for (let x = Lg.exitX + 20; x <= Lg.spawnX - 20; x += 24) xs.push(x)
     return xs
-  }, [])
+  }, [Lg])
+  const interior = useMemo(() => {
+    const pts: [number, number][] = []
+    const nx = Math.max(2, Math.round(Lg.width / 14))
+    const nz = Math.max(2, Math.round(Lg.depth / 13))
+    for (let i = 0; i < nx; i++) for (let j = 0; j < nz; j++) pts.push([Lg.wall.x0 + ((i + 0.5) * Lg.width) / nx, Lg.wall.z0 + ((j + 0.5) * Lg.depth) / nz])
+    return pts
+  }, [Lg])
+  const poleGeo = merged(`poles-${key}`, () =>
+    poles.flatMap((x) => [
+      { geo: cyl(0.14, 9, 8), pos: [x, 4.5, 44.2] as [number, number, number], color: P.frame },
+      { geo: box(0.18, 0.14, 2.8), pos: [x, 9.0, 42.9] as [number, number, number], color: P.frame },
+    ]),
+  )
+  const headGeo = merged(`lampheads-${key}`, () => [
+    ...poles.map((x) => ({ geo: box(0.6, 0.12, 0.9), pos: [x, 8.88, 41.7] as [number, number, number], color: '#fff' })),
+    ...site.docks.map((d) => ({ geo: box(0.7, 0.18, 0.5), pos: [d.x - 1.1, 6.0, L.DOCK_WALL_Z + 0.35] as [number, number, number], color: '#fff' })),
+  ])
+  const pool = (w: number, d: number) => {
+    const g = new THREE.PlaneGeometry(w, d)
+    g.rotateX(-Math.PI / 2)
+    return g
+  }
+  const poolGeo = merged(`pools-${key}`, () => [
+    ...poles.map((x) => ({ geo: pool(20, 17), pos: [x, 0.03, 39.2] as [number, number, number], color: '#fff' })),
+    ...site.docks.map((d) => ({ geo: pool(11, 13), pos: [d.x, 0.035, L.DOCK_WALL_Z + 6] as [number, number, number], color: '#fff' })),
+  ])
+  const interiorGeo = merged(`interior-${key}`, () => interior.map(([x, z]) => ({ geo: pool(17, 15), pos: [x, 0.025, z] as [number, number, number], color: '#fff' })))
   return (
     <group>
-      {/* 도크 위 벽등 + 앞마당 빛 */}
-      {site.docks.map((d) => (
-        <group key={d.id}>
-          <mesh position={[d.x - 1.1, 6.0, L.WALL.z1 + 0.35]} material={nightMats.lampHead}>
-            <boxGeometry args={[0.7, 0.18, 0.5]} />
-          </mesh>
-          <mesh position={[d.x, 0.035, L.WALL.z1 + 6]} rotation-x={-Math.PI / 2} material={nightMats.pool} renderOrder={1}>
-            <planeGeometry args={[11, 13]} />
-          </mesh>
-        </group>
-      ))}
-      {/* 진입로 가로등 */}
-      {road.map((x) => (
-        <group key={x} position={[x, 0, 43.4]}>
-          <mesh position={[0, 4.5, 0]} castShadow>
-            <cylinderGeometry args={[0.12, 0.16, 9, 8]} />
-            <meshStandardMaterial color={P.frame} />
-          </mesh>
-          <mesh position={[0, 9.0, -1.3]} castShadow>
-            <boxGeometry args={[0.18, 0.14, 2.8]} />
-            <meshStandardMaterial color={P.frame} />
-          </mesh>
-          <mesh position={[0, 8.88, -2.5]} material={nightMats.lampHead}>
-            <boxGeometry args={[0.6, 0.12, 0.9]} />
-          </mesh>
-          <mesh position={[0, 0.03, -5]} rotation-x={-Math.PI / 2} material={nightMats.pool} renderOrder={1}>
-            <planeGeometry args={[19, 17]} />
-          </mesh>
-        </group>
-      ))}
-      {/* 창고 내부 고천장 조명 (바닥 빛 번짐) */}
-      {[-18, -6, 6, 18].map((x) =>
-        [-16, -6, 4].map((z) => (
-          <mesh key={`${x}${z}`} position={[x, 0.025, z]} rotation-x={-Math.PI / 2} material={nightMats.interior} renderOrder={1}>
-            <planeGeometry args={[16, 13]} />
-          </mesh>
-        )),
-      )}
+      <mesh geometry={poleGeo} material={vcMat} castShadow />
+      <mesh geometry={headGeo} material={nightMats.lampHead} />
+      <mesh geometry={poolGeo} material={nightMats.pool} renderOrder={1} />
+      <mesh geometry={interiorGeo} material={nightMats.interior} renderOrder={1} />
     </group>
   )
 }

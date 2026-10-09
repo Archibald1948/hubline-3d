@@ -37,9 +37,9 @@ export function truckPhaseLabel(site: Site, tr: Truck): string {
     case 'enroute':
       return '운행 중'
     case 'arriving':
-      return tr.slot === 0 ? '게이트 진입' : '야드 진입'
+      return '게이트 통과 · 대기장 진입'
     case 'queued':
-      return '야드 대기'
+      return `대기장 ${tr.lane + 1}번 레인`
     case 'docking':
       return '도크 접안 중'
     case 'docked':

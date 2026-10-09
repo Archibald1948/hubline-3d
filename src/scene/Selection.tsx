@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber'
 import { Html } from '@react-three/drei'
 import * as THREE from 'three'
 import * as L from '../sim/layout'
-import { TRUCK_MODELS, type Sel, type Site } from '../sim/engine'
+import { ROLE_LABEL, TRUCK_MODELS, type Sel, type Site } from '../sim/engine'
 import { useUi, world } from '../store'
 import { DIR_LABEL, DOCK_STATE_LABEL, flStateLabel, truckPhaseLabel } from '../ui/labels'
 import { P } from './palette'
@@ -41,6 +41,16 @@ export function selAnchor(site: Site, sel: Sel, t: number): Anchor | null {
     case 'bay': {
       const b = site.bays[Number(sel.id)]
       return b ? { x: b.x, z: b.z, r: 2, top: L.RACK_H + 0.5 } : null
+    }
+    case 'worker': {
+      const w = site.workers.find((x) => x.id === sel.id)
+      if (!w || !w.visible) return null
+      const p = site.workerPose(w, t)
+      return { x: p.x, z: p.z, r: 1.1, top: 1.9 }
+    }
+    case 'facility': {
+      const f = site.layout.facilities[sel.id as L.FacilityId]
+      return f ? { x: f.x, z: f.z, r: Math.max(f.w, f.d) / 2 + 2, top: f.h + 3 } : null
     }
   }
 }
@@ -111,6 +121,12 @@ function labelFor(site: Site, sel: Sel): { title: string; sub: string } | null {
       const b = site.bays[Number(sel.id)]
       return b ? { title: b.code, sub: `${b.name} · ${b.stock}/${L.BAY_CAP} PLT` } : null
     }
+    case 'worker': {
+      const w = site.workers.find((x) => x.id === sel.id)
+      return w ? { title: `${w.name} · ${ROLE_LABEL[w.role]}`, sub: w.activity } : null
+    }
+    case 'facility':
+      return null
   }
   void t
 }

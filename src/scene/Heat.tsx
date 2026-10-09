@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef } from 'react'
 import { useFrame } from '@react-three/fiber'
 import * as THREE from 'three'
-import { HEAT, type Site } from '../sim/engine'
+import type { Site } from '../sim/engine'
 
 // 순차 램프: 투명 → 노랑 → 주황 → 빨강
 const STOPS: [number, [number, number, number]][] = [
@@ -23,7 +23,8 @@ function ramp(v: number): [number, number, number] {
 }
 
 export function HeatLayer({ site }: { site: Site }) {
-  const data = useMemo(() => new Uint8Array(HEAT.w * HEAT.h * 4), [])
+  const HEAT = site.layout.heat
+  const data = useMemo(() => new Uint8Array(HEAT.w * HEAT.h * 4), [HEAT])
   const tex = useMemo(() => {
     const t = new THREE.DataTexture(data, HEAT.w, HEAT.h, THREE.RGBAFormat)
     t.magFilter = THREE.LinearFilter
@@ -31,7 +32,7 @@ export function HeatLayer({ site }: { site: Site }) {
     t.flipY = false
     t.needsUpdate = true
     return t
-  }, [data])
+  }, [data, HEAT])
   useEffect(() => () => tex.dispose(), [tex])
   const last = useRef(-1)
   const lastT = useRef(0)

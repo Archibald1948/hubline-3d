@@ -1,8 +1,8 @@
-// 창고 운영 시뮬레이션 엔진 — 1초(시뮬레이션) 고정 스텝, 사이트별 독립 상태
+// 물류 캠퍼스 운영 시뮬레이션 — 1초(시뮬레이션) 고정 스텝, 사이트별 독립 상태
 import { Rng } from './rng'
-import { Path, motion, motionEnd, poseOn, posePlan, type Motion, type Pose } from './path'
+import { Path, motion, motionEnd, poseOn, posePlan, rounded, type Motion, type Pose, type Vec2 } from './path'
 import * as L from './layout'
-import { CARRIERS, CATALOGS, DESTS, OPERATORS, ORIGINS, PLATE_CHARS, PLATE_REGIONS, type CatalogId } from './catalog'
+import { CARRIERS, CATALOGS, DESTS, GIVEN, ORIGINS, PLATE_CHARS, PLATE_REGIONS, SURNAMES, type CatalogId } from './catalog'
 
 export const TRUCK_MODELS = {
   t25: { name: '25톤 윙바디', cap: 26, body: 9.8, len: 12.6, reefer: false },
@@ -13,30 +13,73 @@ export const TRUCK_MODELS = {
 } as const
 export type TruckModelId = keyof typeof TRUCK_MODELS
 
+export type Role = 'checker' | 'picker' | 'lead' | 'office' | 'guard'
+export const ROLE_LABEL: Record<Role, string> = { checker: '검수원', picker: '피커', lead: '현장 관리자', office: '사무직', guard: '경비원' }
+
 export interface SiteConfig {
   id: string
   name: string
   short: string
   code: string
-  rows: number
-  docks: number
+  layout: L.LayoutSpec
   forklifts: number
   inPerHr: number
   outPerHr: number
   models: TruckModelId[]
   catalog: CatalogId
+  crew: Record<Role, number>
   seed: number
 }
 
 export const SITE_CONFIGS: SiteConfig[] = [
-  { id: 'pt', name: '평택 메가허브', short: '평택', code: 'PT', rows: 8, docks: 10, forklifts: 12, inPerHr: 4.0, outPerHr: 5.0, models: ['t25', 't25', 't11', 't5'], catalog: 'general', seed: 11 },
-  { id: 'ic', name: '이천 콜드체인센터', short: '이천', code: 'IC', rows: 6, docks: 6, forklifts: 6, inPerHr: 3.2, outPerHr: 4.2, models: ['r5', 'r11', 'r5'], catalog: 'cold', seed: 23 },
-  { id: 'gh', name: '김해 남부물류센터', short: '김해', code: 'GH', rows: 8, docks: 8, forklifts: 8, inPerHr: 2.6, outPerHr: 3.2, models: ['t25', 't11', 't11', 't5'], catalog: 'south', seed: 37 },
+  {
+    id: 'pt',
+    name: '평택 메가허브',
+    short: '평택',
+    code: 'PT',
+    layout: { sections: 4, rows: 12, docks: 20, chargers: 6 },
+    forklifts: 30,
+    inPerHr: 8,
+    outPerHr: 10,
+    models: ['t25', 't25', 't11', 't5'],
+    catalog: 'general',
+    crew: { checker: 8, picker: 14, lead: 3, office: 8, guard: 2 },
+    seed: 11,
+  },
+  {
+    id: 'ic',
+    name: '이천 콜드체인센터',
+    short: '이천',
+    code: 'IC',
+    layout: { sections: 2, rows: 8, docks: 10, chargers: 4 },
+    forklifts: 12,
+    inPerHr: 5,
+    outPerHr: 6,
+    models: ['r5', 'r11', 'r5'],
+    catalog: 'cold',
+    crew: { checker: 4, picker: 7, lead: 2, office: 5, guard: 1 },
+    seed: 23,
+  },
+  {
+    id: 'gh',
+    name: '김해 남부물류센터',
+    short: '김해',
+    code: 'GH',
+    layout: { sections: 3, rows: 10, docks: 14, chargers: 6 },
+    forklifts: 18,
+    inPerHr: 5,
+    outPerHr: 6.5,
+    models: ['t25', 't11', 't11', 't5'],
+    catalog: 'south',
+    crew: { checker: 6, picker: 10, lead: 2, office: 6, guard: 2 },
+    seed: 37,
+  },
 ]
 
-const TRUCK_SPEED = 0.55
+const TRUCK_SPEED = 0.6
 const TRUCK_REVERSE = 0.2
-const FL_SPEED = 0.62
+const FL_SPEED = 0.66
+const WALK_SPEED = 0.26
 const PICK_T = 32
 const DROP_T = 42
 const SEAL_T = 150
@@ -48,7 +91,7 @@ const BATTERY_LOW = 25
 
 export type Dir = 'in' | 'out'
 export type Level = 'info' | 'warn' | 'crit'
-export type SelKind = 'truck' | 'dock' | 'forklift' | 'bay' | 'shipment'
+export type SelKind = 'truck' | 'dock' | 'forklift' | 'bay' | 'shipment' | 'worker' | 'facility'
 export interface Sel {
   kind: SelKind
   id: string
@@ -111,6 +154,7 @@ export interface Truck {
   pose: Pose
   dockId: string | null
   spawnAt: number
+  lane: number
   slot: number
   moved: number
   sealAt: number | null
@@ -163,6 +207,23 @@ export interface Forklift {
   downUntil: number | null
 }
 
+export interface Worker {
+  id: string
+  name: string
+  role: Role
+  plan: Motion | null
+  pose: Pose
+  until: number
+  activity: string
+  place: string
+  visible: boolean
+  dockId: string | null
+  distance: number
+  breakSlot: number
+  next: { activity: string; place: string; stay: number; visible: boolean; heading: number | null; dockId: string | null } | null
+  alt: boolean
+}
+
 export type ScenarioKind = 'urgent' | 'surge' | 'forkliftDown' | 'truckDown'
 export interface ScenarioResult {
   ok: boolean
@@ -170,8 +231,12 @@ export interface ScenarioResult {
   ref: Sel | null
 }
 
-// 지게차 동선 히트맵 그리드 (건물 내부, 0.5m 셀)
-export const HEAT = { x0: -28, z0: -23, cell: 0.5, w: 112, h: 72 } as const
+export interface GateLog {
+  t: number
+  plate: string
+  truckId: string
+  kind: 'in' | 'out'
+}
 
 export interface SimEvent {
   id: number
@@ -183,6 +248,21 @@ export interface SimEvent {
 
 let eventSeq = 0
 
+// 휴게 시간 (시 단위, 반 시간씩 두 조로 나눔)
+const BREAKS = [
+  [12, 12.5],
+  [18, 18.5],
+  [0, 0.5],
+]
+function breakFor(t: number, slot: number): number | null {
+  const h = (((t % 86400) + 86400) % 86400) / 3600
+  for (const [a] of BREAKS) {
+    const s = a + slot * 0.5
+    if (h >= s && h < s + 0.5) return t + (s + 0.5 - h) * 3600
+  }
+  return null
+}
+
 export class Site {
   readonly cfg: SiteConfig
   readonly layout: L.Layout
@@ -190,15 +270,28 @@ export class Site {
   bays: Bay[] = []
   docks: Dock[] = []
   forklifts: Forklift[] = []
+  workers: Worker[] = []
   trucks = new Map<string, Truck>()
   shipments: Shipment[] = []
   shipById = new Map<string, Shipment>()
-  queue: string[] = []
+  lanes: string[][]
   events: SimEvent[] = []
-  stats = { done: 0, onTime: 0, palletsIn: 0, palletsOut: 0, dwellSum: 0, dwellN: 0, hourly: new Map<number, { ok: number; n: number }>() }
+  gateLog: GateLog[] = []
+  stats = {
+    done: 0,
+    onTime: 0,
+    palletsIn: 0,
+    palletsOut: 0,
+    dwellSum: 0,
+    dwellN: 0,
+    gateIn: 0,
+    gateOut: 0,
+    hourly: new Map<number, { ok: number; n: number }>(),
+  }
   stockVersion = 0
   elapsed = 0
-  heat = new Float32Array(HEAT.w * HEAT.h)
+  parked: boolean[] = []
+  heat: Float32Array
   heatMax = 1
   heatScale = 1
   heatVersion = 0
@@ -212,10 +305,13 @@ export class Site {
   constructor(cfg: SiteConfig, t0: number) {
     this.cfg = cfg
     this.rng = new Rng(cfg.seed)
-    this.layout = L.makeLayout(cfg.rows, cfg.docks)
+    this.layout = L.makeLayout(cfg.layout)
+    const Lg = this.layout
+    this.heat = new Float32Array(Lg.heat.w * Lg.heat.h)
+    this.lanes = Lg.holding.laneZ.map(() => [])
     const cat = CATALOGS[cfg.catalog]
-    for (const row of this.layout.rows) {
-      for (let b = 0; b < L.BAYS_PER_ROW; b++) {
+    for (const row of Lg.rows) {
+      for (let b = 0; b < Lg.baysPerRow; b++) {
         const idx = this.bays.length
         const r = this.rng.next()
         this.bays.push({
@@ -223,7 +319,7 @@ export class Site {
           code: `${row.letter}-${String(b + 1).padStart(2, '0')}`,
           row: row.idx,
           bay: b,
-          x: L.bayX(b),
+          x: L.bayX(Lg, b),
           z: row.z,
           sku: `${cfg.code}${(40000 + ((idx * 7919 + cfg.seed * 131) % 59999)).toString().padStart(5, '0')}`,
           name: cat[(idx * 5 + row.idx * 3) % cat.length],
@@ -235,17 +331,18 @@ export class Site {
         })
       }
     }
-    this.layout.dockXs.forEach((x, i) =>
+    Lg.dockXs.forEach((x, i) =>
       this.docks.push({ id: `D${String(i + 1).padStart(2, '0')}`, idx: i, x, truckId: null, maintUntil: null, maintPending: false, turns: 0, pallets: 0, busySec: 0, serviceSum: 0 }),
     )
+    const names = this.makeNames(cfg.forklifts + Object.values(cfg.crew).reduce((a, b) => a + b, 0))
     for (let i = 0; i < cfg.forklifts; i++) {
-      const x = -20 + (40 * i) / Math.max(1, cfg.forklifts - 1)
+      const x = Lg.wall.x0 + 8 + ((Lg.width - 16) * i) / Math.max(1, cfg.forklifts - 1)
       this.forklifts.push({
         id: `FL-${String(i + 1).padStart(2, '0')}`,
-        operator: OPERATORS[(i + cfg.seed) % OPERATORS.length],
+        operator: names.pop()!,
         state: 'idle',
         plan: null,
-        pose: { x, z: this.layout.corridorZ + 2.2, heading: Math.PI },
+        pose: { x, z: Lg.corridorZ + 2.2, heading: Math.PI },
         battery: this.rng.range(38, 100),
         task: null,
         carrying: false,
@@ -259,8 +356,47 @@ export class Site {
         downUntil: null,
       })
     }
+    let wi = 0
+    for (const role of ['checker', 'picker', 'lead', 'office', 'guard'] as Role[]) {
+      for (let i = 0; i < cfg.crew[role]; i++) {
+        const start = this.workerHome(role)
+        this.workers.push({
+          id: `W${String(++wi).padStart(2, '0')}`,
+          name: names.pop()!,
+          role,
+          plan: null,
+          pose: { x: start.x + this.rng.range(-1, 1), z: start.z + this.rng.range(-1, 1), heading: 0 },
+          until: t0,
+          activity: '근무 준비',
+          place: '',
+          visible: role !== 'office',
+          dockId: null,
+          distance: 0,
+          breakSlot: i % 2,
+          next: null,
+          alt: this.rng.chance(0.5),
+        })
+      }
+    }
+    const pk = Lg.facilities.parking
+    const pr = new Rng(cfg.seed + 5)
+    this.parked = Array.from({ length: 2 * Math.floor((pk.w - 2) / 2.7) }, () => pr.chance(0.78))
     this.nextPlan = Math.ceil((t0 + 1200) / SLOT) * SLOT
     this.nextMaint = t0 + this.rng.range(1.5, 3) * 3600
+  }
+
+  private makeNames(n: number): string[] {
+    const set = new Set<string>()
+    let guard = 0
+    while (set.size < n && guard++ < 5000) set.add(this.rng.pick(SURNAMES) + this.rng.pick(GIVEN))
+    return [...set]
+  }
+
+  private workerHome(role: Role): Vec2 {
+    const Lg = this.layout
+    if (role === 'office') return Lg.officeDoor
+    if (role === 'guard') return Lg.guardPost
+    return { x: this.rng.range(Lg.wall.x0 + 6, Lg.wall.x1 - 6), z: this.rng.range(Lg.corridorZ + 1, 8) }
   }
 
   // ───────── 조회 헬퍼 ─────────
@@ -278,6 +414,12 @@ export class Site {
   }
   forkliftPose(f: Forklift, t: number): Pose {
     return f.plan ? poseOn(f.plan, t, f.pose.heading) : f.pose
+  }
+  workerPose(w: Worker, t: number): Pose {
+    return w.plan ? poseOn(w.plan, t, w.pose.heading) : w.pose
+  }
+  workerMoving(w: Worker, t: number): boolean {
+    return !!w.plan && t < motionEnd(w.plan)
   }
   forkY(f: Forklift, t: number): { y: number; carrying: boolean } {
     if (f.state === 'picking' || f.state === 'dropping') {
@@ -300,10 +442,19 @@ export class Site {
     if (s.arrivedAt == null) return 0
     return (s.dockedAt ?? t) - s.arrivedAt
   }
+  yardTrucks(): Truck[] {
+    return this.lanes.flat().map((id) => this.trucks.get(id)!)
+  }
 
   private log(t: number, level: Level, text: string, ref: Sel | null = null) {
     this.events.unshift({ id: ++eventSeq, t, level, text, ref })
     if (this.events.length > 90) this.events.length = 90
+  }
+  private gate(t: number, tr: Truck, kind: 'in' | 'out') {
+    if (kind === 'in') this.stats.gateIn++
+    else this.stats.gateOut++
+    this.gateLog.unshift({ t, plate: tr.plate, truckId: tr.id, kind })
+    if (this.gateLog.length > 40) this.gateLog.length = 40
   }
 
   // ───────── 출입고 계획 ─────────
@@ -383,7 +534,8 @@ export class Site {
       onTime: null,
       urgent: !!opts.urgent,
     }
-    const approach = ((L.SPAWN_X - L.QUEUE_X0) / TRUCK_SPEED) * 1.3 + 2
+    const Lg = this.layout
+    const approach = ((Lg.spawnX - Lg.holding.eastX) / TRUCK_SPEED) * 1.3 + 2
     const truck: Truck = {
       id: truckId,
       plate: `${this.rng.pick(PLATE_REGIONS)}${this.rng.int(80, 99)}${this.rng.pick(PLATE_CHARS)}${this.rng.int(1000, 9999)}`,
@@ -391,9 +543,10 @@ export class Site {
       shipmentId: id,
       phase: 'enroute',
       plan: [],
-      pose: { x: L.SPAWN_X, z: L.LANE_IN, heading: -Math.PI / 2 },
+      pose: { x: Lg.spawnX, z: L.LANE_IN, heading: -Math.PI / 2 },
       dockId: null,
       spawnAt: eta - approach,
+      lane: -1,
       slot: -1,
       moved: 0,
       sealAt: null,
@@ -406,25 +559,34 @@ export class Site {
     return ship
   }
 
-  // ───────── 트럭 ─────────
+  // ───────── 트럭: 게이트 → 대기장 레인 → 도크 ─────────
   private spawn(tr: Truck, t: number) {
+    const Lg = this.layout
+    const H = Lg.holding
+    let lane = 0
+    for (let i = 1; i < this.lanes.length; i++) if (this.lanes[i].length < this.lanes[lane].length) lane = i
     tr.phase = 'arriving'
-    tr.slot = this.queue.length
-    this.queue.push(tr.id)
-    const target = L.queueSlot(tr.slot)
-    const start = { x: Math.max(L.SPAWN_X, target.x + 30), z: L.LANE_IN }
+    tr.lane = lane
+    tr.slot = this.lanes[lane].length
+    this.lanes[lane].push(tr.id)
+    const target = L.holdingSlot(Lg, lane, tr.slot)
+    const start = { x: Lg.spawnX, z: L.LANE_IN }
     tr.pose = { ...start, heading: -Math.PI / 2 }
-    tr.plan = [motion(new Path([start, target]), t, TRUCK_SPEED)]
+    const lz = H.laneZ[lane]
+    const pts = [start, { x: H.entryX, z: L.LANE_IN }, { x: H.eastX + 6, z: lz }]
+    if (target.x < H.eastX + 6) pts.push(target)
+    tr.plan = [motion(new Path(rounded(pts, 9)), t, TRUCK_SPEED)]
+    this.gate(t, tr, 'in')
   }
 
-  private retargetQueue(t: number) {
-    this.queue.forEach((id, i) => {
+  private retargetLane(lane: number, t: number) {
+    this.lanes[lane].forEach((id, i) => {
       const tr = this.trucks.get(id)!
-      if (tr.slot === i) return
+      if (tr.phase !== 'queued' || tr.slot === i) return
       tr.slot = i
       const p = this.truckPose(tr, t)
       tr.pose = p
-      tr.plan = [motion(new Path([p, L.queueSlot(i)]), t, TRUCK_SPEED)]
+      tr.plan = [motion(new Path([p, L.holdingSlot(this.layout, lane, i)]), t, TRUCK_SPEED)]
     })
   }
 
@@ -442,6 +604,7 @@ export class Site {
             this.log(t, 'warn', `${ship.id} 슬롯 초과 도착 +${late}분 · ${ship.carrier}`, { kind: 'truck', id: tr.id })
           }
         }
+        this.retargetLane(tr.lane, t)
         break
       }
       case 'docking': {
@@ -456,6 +619,7 @@ export class Site {
       }
       case 'departing':
         tr.phase = 'gone'
+        this.gate(t, tr, 'out')
         break
       default:
         break
@@ -463,22 +627,19 @@ export class Site {
   }
 
   private assignDocks(t: number) {
-    while (this.queue.length) {
+    const Lg = this.layout
+    for (let guard = 0; guard < 6; guard++) {
       const free = this.docks.filter((d) => !d.truckId && d.maintUntil == null && !d.maintPending)
-      if (!free.length) break
-      const ready = (id: string) => {
-        const x = this.trucks.get(id)!
-        return x.phase === 'queued' && !x.plan.length
-      }
-      let qi = this.queue.findIndex((id) => ready(id) && this.shipOf(this.trucks.get(id)!).urgent)
-      if (qi < 0) {
-        if (!ready(this.queue[0])) break
-        qi = 0
-      }
-      const tr = this.trucks.get(this.queue[qi])!
+      if (!free.length) return
+      const heads = this.lanes
+        .map((q, lane) => ({ lane, tr: q.length ? this.trucks.get(q[0])! : null }))
+        .filter((h): h is { lane: number; tr: Truck } => !!h.tr && h.tr.phase === 'queued' && !h.tr.plan.length)
+      if (!heads.length) return
+      heads.sort((a, b) => Number(this.shipOf(b.tr).urgent) - Number(this.shipOf(a.tr).urgent) || (this.shipOf(a.tr).arrivedAt ?? 0) - (this.shipOf(b.tr).arrivedAt ?? 0))
+      const { lane, tr } = heads[0]
       free.sort((a, b) => a.turns - b.turns || b.x - a.x)
       const dock = free[0]
-      this.queue.splice(qi, 1)
+      this.lanes[lane].shift()
       dock.truckId = tr.id
       tr.dockId = dock.id
       tr.slot = -1
@@ -487,22 +648,20 @@ export class Site {
       tr.phase = 'docking'
       const p0 = this.truckPose(tr, t)
       const a = { x: dock.x - 13, z: L.LANE_IN }
-      // 대기열 중간에서 빠지는 긴급 차량은 바깥 차선으로 추월
-      const m1 =
-        qi > 0
-          ? motion(new Path([p0, { x: p0.x - 9, z: L.LANE_OUT - 0.6 }, { x: Math.min(p0.x - 20, a.x + 18), z: L.LANE_OUT - 0.6 }, { x: a.x + 6, z: L.LANE_IN }, a], true), t, TRUCK_SPEED)
-          : motion(new Path([p0, a]), t, TRUCK_SPEED)
+      const out = rounded([p0, { x: p0.x - 9, z: p0.z }, { x: Lg.holding.x0 - 30, z: L.LANE_IN }, a], 8)
+      const m1 = motion(new Path(out), t, TRUCK_SPEED)
       const curve = new Path(
         [a, { x: dock.x - 6.6, z: L.LANE_IN - 1.1 }, { x: dock.x - 1.7, z: L.LANE_IN - 4.6 }, { x: dock.x, z: L.LANE_IN - 9.5 }, { x: dock.x, z: L.DOCKED_Z + 2.5 }, { x: dock.x, z: L.DOCKED_Z }],
         true,
       )
       const m2 = motion(curve, motionEnd(m1) + 5, TRUCK_REVERSE, true)
       tr.plan = [m1, m2]
-      this.retargetQueue(t)
+      this.retargetLane(lane, t)
     }
   }
 
   private depart(tr: Truck, t: number) {
+    const Lg = this.layout
     const ship = this.shipOf(tr)
     const dock = this.docks.find((d) => d.id === tr.dockId)!
     dock.truckId = null
@@ -536,7 +695,7 @@ export class Site {
       ],
       true,
     )
-    tr.plan = [motion(Path.join(curve, [{ x: L.EXIT_X, z: L.LANE_OUT }]), t + 4, TRUCK_SPEED)]
+    tr.plan = [motion(Path.join(curve, [{ x: Lg.exitX, z: L.LANE_OUT }]), t + 4, TRUCK_SPEED)]
     if (dock.maintPending) {
       dock.maintPending = false
       this.startMaint(dock, t, this.rng.range(40, 80) * 60)
@@ -715,14 +874,24 @@ export class Site {
   }
 
   private dispatch(t: number) {
+    const Lg = this.layout
     for (const f of this.forklifts) {
       if (f.state !== 'idle' || f.battery >= BATTERY_LOW) continue
       const used = new Set(this.forklifts.map((x) => x.chargerIdx).filter((x) => x != null))
-      const ci = [0, 1, 2].find((i) => !used.has(i))
+      let ci: number | null = null
+      let best = Infinity
+      Lg.chargers.forEach((c, i) => {
+        if (used.has(i)) return
+        const d = Math.abs(c.x - f.pose.x) + Math.abs(c.z - f.pose.z)
+        if (d < best) {
+          best = d
+          ci = i
+        }
+      })
       if (ci == null) continue
       f.chargerIdx = ci
       f.state = 'toCharge'
-      f.plan = this.flMotion(f, this.layout.chargers[ci], t)
+      f.plan = this.flMotion(f, Lg.chargers[ci], t)
       this.log(t, 'info', `${f.id} 배터리 ${Math.round(f.battery)}% · 충전소 이동`, { kind: 'forklift', id: f.id })
     }
     const avail = this.forklifts.filter((f) => f.state === 'idle' && f.battery >= BATTERY_LOW)
@@ -744,7 +913,7 @@ export class Site {
         const line = ship.lines[li]
         line.flight++
         const bay = this.bays[line.bay]
-        const row = this.layout.rows[bay.row]
+        const row = Lg.rows[bay.row]
         const used = new Set(this.forklifts.filter((x) => x.task?.truckId === tr.id).map((x) => x.task!.lane))
         const lane = [0, -1.15, 1.15, 0.6].find((l) => !used.has(l)) ?? 0
         const dockLoc: L.Loc = { x: dock.x + lane, z: L.DOCK_LOC_Z, heading: 0 }
@@ -767,11 +936,123 @@ export class Site {
     }
   }
 
+  // ───────── 작업자 ─────────
+  private walkTo(w: Worker, to: Vec2, t: number, next: NonNullable<Worker['next']>, walkLabel: string) {
+    const from = this.workerPose(w, t)
+    w.pose = from
+    const path = new Path(L.walkRoute(from, to, this.layout))
+    w.distance += path.length
+    w.plan = path.length > 0.3 ? motion(path, t, WALK_SPEED, false, 'linear') : null
+    w.next = next
+    w.visible = true
+    w.activity = walkLabel
+    w.place = next.place
+    w.dockId = null
+    if (!w.plan) this.arriveWorker(w, t)
+  }
+  private arriveWorker(w: Worker, t: number) {
+    const n = w.next
+    w.plan = null
+    if (!n) return
+    w.activity = n.activity
+    w.place = n.place
+    w.until = t + n.stay
+    w.visible = n.visible
+    w.dockId = n.dockId
+    if (n.heading != null) w.pose = { ...w.pose, heading: n.heading }
+    w.next = null
+  }
+
+  private stepWorkers(t: number) {
+    const Lg = this.layout
+    const checkers = this.workers.filter((w) => w.role === 'checker')
+    for (const w of this.workers) {
+      if (w.plan) {
+        if (t < motionEnd(w.plan)) continue
+        w.pose = poseOn(w.plan, motionEnd(w.plan), w.pose.heading)
+        this.arriveWorker(w, t)
+      }
+      const breakEnd = w.role === 'guard' ? null : breakFor(t, w.breakSlot)
+      if (breakEnd != null && w.activity !== '휴게 중' && !w.next?.activity.startsWith('휴게')) {
+        this.walkTo(w, { x: Lg.officeDoor.x + this.rng.range(-0.6, 0.6), z: Lg.officeDoor.z + this.rng.range(-0.6, 0.6) }, t, { activity: '휴게 중', place: '사무동 휴게실', stay: breakEnd - t, visible: false, heading: null, dockId: null }, '휴게실로 이동')
+        continue
+      }
+      if (w.role === 'checker' && w.dockId && t < w.until) {
+        const d = this.docks.find((x) => x.id === w.dockId)
+        if (!d || this.dockState(d) !== 'occupied') w.until = t
+      }
+      if (t < w.until) continue
+      this.decideWorker(w, t, checkers)
+    }
+  }
+
+  private decideWorker(w: Worker, t: number, checkers: Worker[]) {
+    const Lg = this.layout
+    const r = this.rng
+    switch (w.role) {
+      case 'checker': {
+        const k = checkers.indexOf(w)
+        const mine = this.docks.filter((d) => d.idx % checkers.length === k)
+        const busy = mine.find((d) => this.dockState(d) === 'occupied' && !this.workers.some((o) => o !== w && o.dockId === d.id && o.role === 'checker'))
+        if (busy) {
+          this.walkTo(w, { x: busy.x + 2.3, z: 9.8 }, t, { activity: `검수 중 · ${busy.id}`, place: `${busy.id} 도크`, stay: 1e9, visible: true, heading: 0, dockId: busy.id }, `${busy.id}로 이동`)
+        } else {
+          const d = r.pick(mine.length ? mine : this.docks)
+          this.walkTo(w, { x: d.x + r.range(-1.5, 1.5), z: r.range(Lg.corridorZ + 2, 8) }, t, { activity: '입차 대기', place: `${d.id} 인근`, stay: r.range(40, 100), visible: true, heading: 0, dockId: null }, '이동 중')
+        }
+        break
+      }
+      case 'picker': {
+        w.alt = !w.alt
+        if (w.alt) {
+          const b = r.pick(this.bays)
+          const row = Lg.rows[b.row]
+          const z = row.aisleZ + (row.z > row.aisleZ ? 1.0 : -1.0)
+          this.walkTo(w, { x: b.x + r.range(-0.8, 0.8), z }, t, { activity: `피킹 · ${b.code}`, place: `${row.letter}열 통로`, stay: r.range(80, 180), visible: true, heading: row.z > row.aisleZ ? 0 : Math.PI, dockId: null }, `${b.code}로 이동`)
+        } else {
+          const d = r.pick(this.docks)
+          this.walkTo(w, { x: d.x + r.range(-1.4, 1.4), z: r.range(9.2, 12.2) }, t, { activity: '출고 분류·랩핑', place: `${d.id} 스테이징`, stay: r.range(60, 140), visible: true, heading: r.range(-3, 3), dockId: null }, '스테이징으로 이동')
+        }
+        break
+      }
+      case 'lead': {
+        const roll = r.next()
+        if (roll < 0.18) {
+          this.walkTo(w, Lg.officeDoor, t, { activity: '운영 회의', place: '사무동', stay: r.range(600, 1300), visible: false, heading: null, dockId: null }, '사무동으로 이동')
+        } else {
+          const d = r.pick(this.docks)
+          this.walkTo(w, { x: d.x + r.range(-2, 2), z: r.range(6, 8.5) }, t, { activity: '현장 순회', place: `${d.id} 앞`, stay: r.range(40, 90), visible: true, heading: 0, dockId: null }, '현장 순회')
+        }
+        break
+      }
+      case 'office': {
+        const inside = !w.visible
+        if (inside && r.chance(0.3)) {
+          const d = r.pick(this.docks.slice(0, Math.ceil(this.docks.length / 2)))
+          this.walkTo(w, { x: d.x + r.range(-1, 1), z: 7.5 }, t, { activity: `서류 전달 · ${d.id}`, place: `${d.id} 앞`, stay: r.range(50, 110), visible: true, heading: 0, dockId: null }, '현장으로 이동')
+        } else {
+          this.walkTo(w, Lg.officeDoor, t, { activity: '사무 업무', place: '사무동', stay: r.range(900, 2400), visible: false, heading: null, dockId: null }, '사무동으로 복귀')
+        }
+        break
+      }
+      case 'guard': {
+        const g = Lg.guardPost
+        if (r.chance(0.3)) {
+          this.walkTo(w, { x: Lg.gateX + 1.5, z: L.LANE_IN - 2.4 }, t, { activity: '차량 확인', place: '정문 차단기', stay: r.range(30, 70), visible: true, heading: 0, dockId: null }, '차단기로 이동')
+        } else {
+          this.walkTo(w, { x: g.x + r.range(-0.6, 0.6), z: g.z + 1.9 }, t, { activity: '출입 관리', place: '정문 경비실', stay: r.range(240, 600), visible: true, heading: Math.PI / 2, dockId: null }, '경비실로 이동')
+        }
+        break
+      }
+    }
+  }
+
   // ───────── 메인 스텝 ─────────
   step(t: number) {
     this.elapsed++
     this.plan(t)
 
+    if (t % 5 === 0)
     for (const s of this.shipments) {
       if (s.status === 'planned' && t >= s.etaKnownAt) {
         s.status = 'enroute'
@@ -804,10 +1085,10 @@ export class Site {
 
     this.assignDocks(t)
     this.stepForklifts(t)
-    this.dispatch(t)
-    if (t % 2 === 0) this.recordHeat(t)
+    if ((t & 1) === 1) this.dispatch(t)
+    if ((t & 1) === 0) this.stepWorkers(t)
+    if ((t & 1) === 0) this.recordHeat(t)
 
-    // 도크 점검 스케줄
     if (t >= this.nextMaint) {
       this.nextMaint = t + this.rng.range(2.5, 5) * 3600
       const d = this.rng.pick(this.docks)
@@ -824,17 +1105,18 @@ export class Site {
       if (d.truckId && this.trucks.get(d.truckId)?.phase === 'docked') d.busySec++
     }
 
-    const waiting = this.queue.length
-    if (waiting >= 4 && !this.queueAlert) {
+    const waiting = this.lanes.reduce((s, q) => s + q.length, 0)
+    if (waiting >= 8 && !this.queueAlert) {
       this.queueAlert = true
-      this.log(t, 'warn', `야드 대기 ${waiting}대 · 도크 배정 지연`)
-    } else if (waiting <= 2) this.queueAlert = false
+      this.log(t, 'warn', `트럭 대기장 ${waiting}대 · 도크 배정 지연`, { kind: 'facility', id: 'lot' })
+    } else if (waiting <= 4) this.queueAlert = false
 
     if (t % 600 === 0) this.prune(t)
   }
 
   // 실제 값 = heat[i] * heatScale. 감쇠는 스케일만 줄여 O(1)로 처리
   private recordHeat(t: number) {
+    const G = this.layout.heat
     const decay = 0.99981 // 반감기 약 2시간
     const h = this.heat
     this.heatScale *= decay
@@ -847,15 +1129,15 @@ export class Site {
     for (const f of this.forklifts) {
       if (!f.plan || t >= motionEnd(f.plan)) continue
       const p = poseOn(f.plan, t, f.pose.heading)
-      const cx = Math.floor((p.x - HEAT.x0) / HEAT.cell)
-      const cz = Math.floor((p.z - HEAT.z0) / HEAT.cell)
+      const cx = Math.floor((p.x - G.x0) / G.cell)
+      const cz = Math.floor((p.z - G.z0) / G.cell)
       for (let dz = -1; dz <= 1; dz++)
         for (let dx = -1; dx <= 1; dx++) {
           const x = cx + dx
           const z = cz + dz
-          if (x < 0 || z < 0 || x >= HEAT.w || z >= HEAT.h) continue
+          if (x < 0 || z < 0 || x >= G.w || z >= G.h) continue
           const w = dx === 0 && dz === 0 ? 1 : dx === 0 || dz === 0 ? 0.5 : 0.25
-          const i = z * HEAT.w + x
+          const i = z * G.w + x
           h[i] += w * inv
           const eff = h[i] * this.heatScale
           if (eff > this.heatMax) this.heatMax = eff
@@ -879,8 +1161,8 @@ export class Site {
       case 'surge': {
         const ws = Math.floor(t / SLOT) * SLOT
         const made: Shipment[] = []
-        for (let i = 0; i < 4; i++) {
-          const s = this.createShipment('in', ws, { eta: t + 200 + i * 45 })
+        for (let i = 0; i < 6; i++) {
+          const s = this.createShipment('in', ws, { eta: t + 200 + i * 40 })
           if (s) {
             s.etaKnownAt = t
             s.status = 'enroute'
@@ -888,8 +1170,8 @@ export class Site {
           }
         }
         if (!made.length) return { ok: false, text: '랙에 빈 공간이 없어 입고를 만들지 못했습니다.', ref: null }
-        this.log(t, 'warn', `입고 트럭 ${made.length}대 동시 도착 예정 · 예약 외 물량`, { kind: 'shipment', id: made[0].id })
-        return { ok: true, text: `예약 외 입고 트럭 ${made.length}대가 몰려옵니다`, ref: { kind: 'shipment', id: made[0].id } }
+        this.log(t, 'warn', `입고 트럭 ${made.length}대 동시 도착 예정 · 예약 외 물량`, { kind: 'facility', id: 'lot' })
+        return { ok: true, text: `예약 외 입고 트럭 ${made.length}대가 몰려옵니다`, ref: { kind: 'facility', id: 'gate' } }
       }
       case 'forkliftDown': {
         const busy = this.forklifts.filter((f) => f.state !== 'down' && f.task)
@@ -933,13 +1215,15 @@ export class Site {
   kpis(t: number) {
     const opDocks = this.docks.filter((d) => d.maintUntil == null)
     const occupied = this.docks.filter((d) => this.dockState(d) === 'occupied').length
-    const yard = this.queue.map((id) => this.trucks.get(id)!).filter(Boolean)
+    const yard = this.yardTrucks()
     const waits = yard.map((tr) => this.dwellSoFar(tr, t))
     const out = this.bays.filter((b) => b.stock <= 0).length
     const low = this.bays.filter((b) => b.stock > 0 && b.stock <= LOW_STOCK).length
     const totalStock = this.bays.reduce((s, b) => s + b.stock, 0)
     const active = this.forklifts.filter((f) => f.state !== 'idle' && f.state !== 'charging' && f.state !== 'toCharge' && f.state !== 'down').length
     const down = this.forklifts.filter((f) => f.state === 'down').length
+    const onBreak = this.workers.filter((w) => w.activity === '휴게 중').length
+    const onFloor = this.workers.filter((w) => w.visible).length
     const hk = Math.floor(t / 3600)
     const hourly: { hour: number; pct: number | null; n: number }[] = []
     for (let h = hk - 7; h <= hk; h++) {
@@ -956,6 +1240,7 @@ export class Site {
       totalDocks: this.docks.length,
       utilization: this.elapsed ? (this.docks.reduce((s, d) => s + d.busySec, 0) / (this.docks.length * this.elapsed)) * 100 : 0,
       yardCount: yard.length,
+      yardCap: this.layout.holding.laneZ.length * this.layout.holding.perLane,
       avgWaitMin: waits.length ? waits.reduce((a, b) => a + b, 0) / waits.length / 60 : 0,
       avgDwellMin: this.stats.dwellN ? this.stats.dwellSum / this.stats.dwellN / 60 : 0,
       palletsIn: this.stats.palletsIn,
@@ -967,6 +1252,9 @@ export class Site {
       flDown: down,
       flTotal: this.forklifts.length,
       avgBattery: this.forklifts.reduce((s, f) => s + f.battery, 0) / this.forklifts.length,
+      crew: this.workers.length,
+      onFloor,
+      onBreak,
     }
   }
 }
