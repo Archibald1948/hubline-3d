@@ -71,7 +71,9 @@ export function flStateLabel(f: Forklift): string {
   const d = f.task?.dir
   switch (f.state) {
     case 'idle':
-      return '대기'
+      return f.parked ? '대기 (주차)' : '대기'
+    case 'toPark':
+      return '주차 칸으로 이동'
     case 'toPick':
       return d === 'in' ? '도크로 이동' : '랙으로 이동'
     case 'picking':

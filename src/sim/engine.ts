@@ -1,6 +1,8 @@
 // 물류 캠퍼스 운영 시뮬레이션 — 1초(시뮬레이션) 고정 스텝, 사이트별 독립 상태
 import { Rng } from './rng'
-import { Path, motion, motionEnd, poseOn, posePlan, rounded, type Motion, type Pose, type Vec2 } from './path'
+import { Path, motion, motionEnd, poseOn, rounded, type Motion, type Pose, type Vec2 } from './path'
+import { FloorGrid } from './grid'
+import { lerpPose, makeMover, obbAt, obbOverlap, obbRect, stepMover, type Leg, type Mover, type OBB, type Rect, type StepEnv } from './mover'
 import * as L from './layout'
 import { CARRIERS, CATALOGS, DESTS, GIVEN, ORIGINS, PLATE_CHARS, PLATE_REGIONS, SURNAMES, type CatalogId } from './catalog'
 
@@ -37,10 +39,10 @@ export const SITE_CONFIGS: SiteConfig[] = [
     name: '평택 메가허브',
     short: '평택',
     code: 'PT',
-    layout: { sections: 4, rows: 12, docks: 20, chargers: 6 },
-    forklifts: 30,
-    inPerHr: 8,
-    outPerHr: 10,
+    layout: { sections: 4, rows: 12, docks: 16, chargers: 6 },
+    forklifts: 24,
+    inPerHr: 7,
+    outPerHr: 8,
     models: ['t25', 't25', 't11', 't5'],
     catalog: 'general',
     crew: { checker: 8, picker: 14, lead: 3, office: 8, guard: 2 },
@@ -51,10 +53,10 @@ export const SITE_CONFIGS: SiteConfig[] = [
     name: '이천 콜드체인센터',
     short: '이천',
     code: 'IC',
-    layout: { sections: 2, rows: 8, docks: 10, chargers: 4 },
-    forklifts: 12,
-    inPerHr: 5,
-    outPerHr: 6,
+    layout: { sections: 2, rows: 8, docks: 5, chargers: 4 },
+    forklifts: 10,
+    inPerHr: 4,
+    outPerHr: 4.5,
     models: ['r5', 'r11', 'r5'],
     catalog: 'cold',
     crew: { checker: 4, picker: 7, lead: 2, office: 5, guard: 1 },
@@ -65,10 +67,10 @@ export const SITE_CONFIGS: SiteConfig[] = [
     name: '김해 남부물류센터',
     short: '김해',
     code: 'GH',
-    layout: { sections: 3, rows: 10, docks: 14, chargers: 6 },
-    forklifts: 18,
+    layout: { sections: 3, rows: 10, docks: 11, chargers: 6 },
+    forklifts: 16,
     inPerHr: 5,
-    outPerHr: 6.5,
+    outPerHr: 5.5,
     models: ['t25', 't11', 't11', 't5'],
     catalog: 'south',
     crew: { checker: 6, picker: 10, lead: 2, office: 6, guard: 2 },
@@ -150,12 +152,10 @@ export interface Truck {
   model: TruckModelId
   shipmentId: string
   phase: TruckPhase
-  plan: Motion[]
-  pose: Pose
+  mv: Mover
   dockId: string | null
   spawnAt: number
   lane: number
-  slot: number
   moved: number
   sealAt: number | null
   departAt: number | null
@@ -176,7 +176,7 @@ export interface Dock {
 }
 export type DockState = 'free' | 'reserved' | 'occupied' | 'maintenance'
 
-export type FlState = 'idle' | 'toPick' | 'picking' | 'toDrop' | 'dropping' | 'toCharge' | 'charging' | 'down'
+export type FlState = 'idle' | 'toPark' | 'toPick' | 'picking' | 'toDrop' | 'dropping' | 'toCharge' | 'charging' | 'down'
 export interface FlTask {
   truckId: string
   shipId: string
@@ -192,8 +192,7 @@ export interface Forklift {
   id: string
   operator: string
   state: FlState
-  plan: Motion | null
-  pose: Pose
+  mv: Mover
   battery: number
   task: FlTask | null
   carrying: boolean
@@ -205,6 +204,13 @@ export interface Forklift {
   distance: number
   chargerIdx: number | null
   downUntil: number | null
+  parkKey: string | null
+  parkLoc: L.Loc | null
+  parked: boolean
+  target: L.Loc | null
+  resumeAt: number | null
+  lastFix: number
+  dockZone: string | null
 }
 
 export interface Worker {
@@ -275,6 +281,15 @@ export class Site {
   shipments: Shipment[] = []
   shipById = new Map<string, Shipment>()
   lanes: string[][]
+  roadWait: string[] = []
+  zones = new Map<string, { owner: string; rects: Rect[]; active: boolean }>()
+  private truckObbs = new Map<string, OBB>()
+  private flZoneOwner = new Map<string, string>() // 도크 작업 구역 → 이동 중인 지게차
+  backoffs = 0
+  detours = 0
+  private grid: FloorGrid
+  private boxes: { r: Rect; owner: string | null }[] = []
+  private flObbs = new Map<string, OBB>()
   events: SimEvent[] = []
   gateLog: GateLog[] = []
   stats = {
@@ -309,6 +324,12 @@ export class Site {
     const Lg = this.layout
     this.heat = new Float32Array(Lg.heat.w * Lg.heat.h)
     this.lanes = Lg.holding.laneZ.map(() => [])
+    this.grid = new FloorGrid(Lg, 0.75)
+    // 교차로 박스: 교차 통로 × (랙 통로, 메인 통로)
+    const gaps: [number, number][] = [[Lg.wall.x0 + 0.2, Lg.sectionX0[0]]]
+    for (let i = 0; i < Lg.sectionX0.length - 1; i++) gaps.push([Lg.sectionX0[i] + L.SECTION_W, Lg.sectionX0[i + 1]])
+    gaps.push([Lg.sectionX0[Lg.sectionX0.length - 1] + L.SECTION_W, Lg.wall.x1 - 0.2])
+    for (const [gx0, gx1] of gaps) for (const z of [...Lg.aisles, Lg.corridorZ]) this.boxes.push({ r: { x0: gx0, x1: gx1, z0: z - 1.6, z1: z + 1.6 }, owner: null })
     const cat = CATALOGS[cfg.catalog]
     for (const row of Lg.rows) {
       for (let b = 0; b < Lg.baysPerRow; b++) {
@@ -341,8 +362,7 @@ export class Site {
         id: `FL-${String(i + 1).padStart(2, '0')}`,
         operator: names.pop()!,
         state: 'idle',
-        plan: null,
-        pose: { x, z: Lg.corridorZ + 2.2, heading: Math.PI },
+        mv: makeMover(`FL-${String(i + 1).padStart(2, '0')}`, { x, z: Lg.corridorZ + 4.4, heading: Math.PI }, 3.3, 1.2, 0.37, 0.45, 0.22),
         battery: this.rng.range(38, 100),
         task: null,
         carrying: false,
@@ -354,6 +374,13 @@ export class Site {
         distance: 0,
         chargerIdx: null,
         downUntil: null,
+        parkKey: null,
+        parkLoc: null,
+        parked: false,
+        target: null,
+        resumeAt: null,
+        lastFix: -1e9,
+        dockZone: null,
       })
     }
     let wi = 0
@@ -409,11 +436,12 @@ export class Site {
   shipOf(tr: Truck): Shipment {
     return this.shipById.get(tr.shipmentId)!
   }
+  // 렌더용: 직전 스텝과 현재 스텝 자세를 시간 비율로 보간
   truckPose(tr: Truck, t: number): Pose {
-    return posePlan(tr.plan, t, tr.pose)
+    return lerpPose(tr.mv.prev, tr.mv.pose, t - Math.floor(t))
   }
   forkliftPose(f: Forklift, t: number): Pose {
-    return f.plan ? poseOn(f.plan, t, f.pose.heading) : f.pose
+    return lerpPose(f.mv.prev, f.mv.pose, t - Math.floor(t))
   }
   workerPose(w: Worker, t: number): Pose {
     return w.plan ? poseOn(w.plan, t, w.pose.heading) : w.pose
@@ -443,7 +471,7 @@ export class Site {
     return (s.dockedAt ?? t) - s.arrivedAt
   }
   yardTrucks(): Truck[] {
-    return this.lanes.flat().map((id) => this.trucks.get(id)!)
+    return [...this.roadWait, ...this.lanes.flat()].map((id) => this.trucks.get(id)!)
   }
 
   private log(t: number, level: Level, text: string, ref: Sel | null = null) {
@@ -535,19 +563,17 @@ export class Site {
       urgent: !!opts.urgent,
     }
     const Lg = this.layout
-    const approach = ((Lg.spawnX - Lg.holding.eastX) / TRUCK_SPEED) * 1.3 + 2
+    const approach = (Lg.spawnX - Lg.gateX) / TRUCK_SPEED + 20
     const truck: Truck = {
       id: truckId,
       plate: `${this.rng.pick(PLATE_REGIONS)}${this.rng.int(80, 99)}${this.rng.pick(PLATE_CHARS)}${this.rng.int(1000, 9999)}`,
       model: modelId,
       shipmentId: id,
       phase: 'enroute',
-      plan: [],
-      pose: { x: Lg.spawnX, z: L.LANE_IN, heading: -Math.PI / 2 },
+      mv: makeMover(truckId, { x: Lg.spawnX, z: L.LANE_IN, heading: -Math.PI / 2 }, model.len, 2.6, model.len / 2, 2.2, 0.12),
       dockId: null,
       spawnAt: eta - approach,
       lane: -1,
-      slot: -1,
       moved: 0,
       sealAt: null,
       departAt: null,
@@ -560,110 +586,194 @@ export class Site {
   }
 
   // ───────── 트럭: 게이트 → 대기장 레인 → 도크 ─────────
-  private spawn(tr: Truck, t: number) {
+  // 트럭은 물리 이동(mover)으로 움직인다. 줄서기는 앞차 감지로 자연스럽게 생기고,
+  // 후진 접안·출차는 구역을 예약해 겹치는 기동이 동시에 일어나지 않게 한다.
+  private leg(points: Vec2[], opts: { reverse?: boolean; zone?: string | null; smooth?: boolean; r?: number; vmax?: number } = {}): Leg {
+    const path = opts.smooth ? new Path(points, true) : new Path(rounded(points, opts.r ?? 8))
+    return { path, vmax: opts.vmax ?? TRUCK_SPEED, reverse: !!opts.reverse, zone: opts.zone ?? null, ghost: !!opts.zone }
+  }
+
+  private spawn(tr: Truck, _t: number) {
     const Lg = this.layout
-    const H = Lg.holding
-    let lane = 0
-    for (let i = 1; i < this.lanes.length; i++) if (this.lanes[i].length < this.lanes[lane].length) lane = i
     tr.phase = 'arriving'
-    tr.lane = lane
-    tr.slot = this.lanes[lane].length
-    this.lanes[lane].push(tr.id)
-    const target = L.holdingSlot(Lg, lane, tr.slot)
     const start = { x: Lg.spawnX, z: L.LANE_IN }
-    tr.pose = { ...start, heading: -Math.PI / 2 }
+    tr.mv.pose = { ...start, heading: -Math.PI / 2 }
+    tr.mv.prev = { ...tr.mv.pose }
+    tr.mv.s = 0
+    tr.mv.v = TRUCK_SPEED
+    const lane = this.freeLane(this.shipOf(tr).urgent)
+    if (lane >= 0) this.assignLane(tr, lane)
+    else {
+      tr.lane = -1
+      this.roadWait.push(tr.id)
+      tr.mv.legs = [this.leg([start, { x: Lg.holding.entryX + 16, z: L.LANE_IN }])]
+    }
+  }
+
+  private freeLane(_urgent: boolean): number {
+    const per = this.layout.holding.perLane
+    let best = -1
+    for (let i = 0; i < this.lanes.length; i++) {
+      if (this.lanes[i].length >= per) continue
+      if (best < 0 || this.lanes[i].length < this.lanes[best].length) best = i
+    }
+    return best
+  }
+
+  private assignLane(tr: Truck, lane: number) {
+    const H = this.layout.holding
+    this.lanes[lane].push(tr.id)
+    tr.lane = lane
+    const p = tr.mv.pose
     const lz = H.laneZ[lane]
-    const pts = [start, { x: H.entryX, z: L.LANE_IN }, { x: H.eastX + 6, z: lz }]
-    if (target.x < H.eastX + 6) pts.push(target)
-    tr.plan = [motion(new Path(rounded(pts, 9)), t, TRUCK_SPEED)]
-    this.gate(t, tr, 'in')
+    const pts: Vec2[] = [p]
+    if (p.x > H.entryX) pts.push({ x: H.entryX, z: L.LANE_IN })
+    pts.push({ x: H.eastX + 7, z: lz }, { x: H.x0, z: lz })
+    tr.mv.legs = [this.leg(pts, { r: 9 })]
+    tr.mv.s = 0
   }
 
-  private retargetLane(lane: number, t: number) {
-    this.lanes[lane].forEach((id, i) => {
-      const tr = this.trucks.get(id)!
-      if (tr.phase !== 'queued' || tr.slot === i) return
-      tr.slot = i
-      const p = this.truckPose(tr, t)
-      tr.pose = p
-      tr.plan = [motion(new Path([p, L.holdingSlot(this.layout, lane, i)]), t, TRUCK_SPEED)]
-    })
+  private zoneOverlaps(rects: Rect[], self: string): boolean {
+    for (const z of this.zones.values()) {
+      if (z.owner === self) continue
+      for (const a of z.rects) for (const b of rects) if (a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1) return true
+    }
+    return false
+  }
+  private reserveZone(owner: string, rects: Rect[], active: boolean): boolean {
+    if (this.zoneOverlaps(rects, owner)) return false
+    this.zones.set(owner, { owner, rects, active })
+    return true
+  }
+  private zoneClear(owner: string): boolean {
+    const z = this.zones.get(owner)
+    if (!z) return false
+    if (!z.active) {
+      const me = this.truckObbs.get(owner)
+      if (me && z.rects.some((r) => obbRect(me, r))) z.active = true
+      else return false
+    }
+    for (const tr of this.trucks.values()) {
+      if (tr.id === owner || tr.phase === 'enroute' || tr.phase === 'gone' || tr.phase === 'docked') continue
+      const o = this.truckObbs.get(tr.id)
+      if (o && z.rects.some((r) => obbRect(o, r))) return false
+    }
+    return true
   }
 
-  private onTruckPlanDone(tr: Truck, t: number) {
+  private onTruckLegsDone(tr: Truck, t: number) {
     const ship = this.shipOf(tr)
-    switch (tr.phase) {
-      case 'arriving': {
-        tr.phase = 'queued'
-        if (ship.arrivedAt == null) {
+    if (tr.phase === 'docking') {
+      tr.phase = 'docked'
+      this.zones.delete(tr.id)
+      ship.dockedAt = t
+      ship.status = 'docked'
+      if (ship.arrivedAt != null) {
+        this.stats.dwellSum += t - ship.arrivedAt
+        this.stats.dwellN++
+      }
+    } else if (tr.phase === 'departing') {
+      tr.phase = 'gone'
+      this.zones.delete(tr.id)
+      this.gate(t, tr, 'out')
+    }
+  }
+
+  private stepTrucks(t: number) {
+    const Lg = this.layout
+    // 도로 대기 차량 → 빈 레인
+    while (this.roadWait.length) {
+      const lane = this.freeLane(false)
+      if (lane < 0) break
+      const tr = this.trucks.get(this.roadWait.shift()!)!
+      this.assignLane(tr, lane)
+    }
+    this.truckObbs.clear()
+    const active: Truck[] = []
+    for (const tr of this.trucks.values()) {
+      if (tr.phase === 'enroute' || tr.phase === 'gone') continue
+      tr.mv.prev = tr.mv.pose
+      this.truckObbs.set(tr.id, obbAt(tr.mv, tr.mv.pose))
+      active.push(tr)
+    }
+    const movers = new Map(active.map((x) => [x.id, x.mv]))
+    const env: StepEnv = {
+      t,
+      obbs: this.truckObbs,
+      zones: [...this.zones.values()],
+      canStartZone: (m) => this.zoneClear(m.id),
+      movers,
+    }
+    for (const tr of active) {
+      if (!tr.mv.legs.length) continue
+      const done = stepMover(tr.mv, env)
+      if (done && !tr.mv.legs.length) this.onTruckLegsDone(tr, t)
+      const own = this.zones.get(tr.id)
+      if (own && !own.active) {
+        const o = this.truckObbs.get(tr.id)!
+        if (own.rects.some((r) => obbRect(o, r))) own.active = true
+      }
+      const ship = this.shipOf(tr)
+      if (tr.phase === 'arriving') {
+        if (ship.arrivedAt == null && tr.mv.pose.x < Lg.gateX) {
           ship.arrivedAt = t
           ship.status = 'yard'
+          this.gate(t, tr, 'in')
           if (ship.dir === 'in') ship.onTime = t <= ship.due
           if (t > ship.winEnd) {
-            const late = Math.round((t - ship.winEnd) / 60)
-            this.log(t, 'warn', `${ship.id} 슬롯 초과 도착 +${late}분 · ${ship.carrier}`, { kind: 'truck', id: tr.id })
+            this.log(t, 'warn', `${ship.id} 슬롯 초과 도착 +${Math.round((t - ship.winEnd) / 60)}분 · ${ship.carrier}`, { kind: 'truck', id: tr.id })
           }
         }
-        this.retargetLane(tr.lane, t)
-        break
+        if (tr.lane >= 0 && tr.mv.pose.z < L.LANE_IN - 4) tr.phase = 'queued'
       }
-      case 'docking': {
-        tr.phase = 'docked'
-        ship.dockedAt = t
-        ship.status = 'docked'
-        if (ship.arrivedAt != null) {
-          this.stats.dwellSum += t - ship.arrivedAt
-          this.stats.dwellN++
-        }
-        break
+      // 출차 구역은 차체가 완전히 빠져나가면 반납
+      if (tr.phase === 'departing' && this.zones.has(tr.id) && tr.mv.legs.length <= 1) {
+        const z = this.zones.get(tr.id)!
+        const o = this.truckObbs.get(tr.id)!
+        if (!z.rects.some((r) => obbRect(o, r))) this.zones.delete(tr.id)
       }
-      case 'departing':
-        tr.phase = 'gone'
-        this.gate(t, tr, 'out')
-        break
-      default:
-        break
     }
   }
 
   private assignDocks(t: number) {
-    const Lg = this.layout
+    void t
     for (let guard = 0; guard < 6; guard++) {
       const free = this.docks.filter((d) => !d.truckId && d.maintUntil == null && !d.maintPending)
       if (!free.length) return
       const heads = this.lanes
         .map((q, lane) => ({ lane, tr: q.length ? this.trucks.get(q[0])! : null }))
-        .filter((h): h is { lane: number; tr: Truck } => !!h.tr && h.tr.phase === 'queued' && !h.tr.plan.length)
+        .filter((h): h is { lane: number; tr: Truck } => !!h.tr && h.tr.phase === 'queued')
       if (!heads.length) return
       heads.sort((a, b) => Number(this.shipOf(b.tr).urgent) - Number(this.shipOf(a.tr).urgent) || (this.shipOf(a.tr).arrivedAt ?? 0) - (this.shipOf(b.tr).arrivedAt ?? 0))
       const { lane, tr } = heads[0]
+      const len = TRUCK_MODELS[tr.model].len
       free.sort((a, b) => a.turns - b.turns || b.x - a.x)
-      const dock = free[0]
+      const dock = free.find((d) => this.reserveZone(tr.id, L.reverseZone(d.x, len), false))
+      if (!dock) return
       this.lanes[lane].shift()
       dock.truckId = tr.id
       tr.dockId = dock.id
-      tr.slot = -1
       const ship = this.shipOf(tr)
       ship.dockId = dock.id
       tr.phase = 'docking'
-      const p0 = this.truckPose(tr, t)
+      const p0 = tr.mv.pose
       const a = { x: dock.x - 13, z: L.LANE_IN }
-      const out = rounded([p0, { x: p0.x - 9, z: p0.z }, { x: Lg.holding.x0 - 30, z: L.LANE_IN }, a], 8)
-      const m1 = motion(new Path(out), t, TRUCK_SPEED)
-      const curve = new Path(
+      const H = this.layout.holding
+      const approach = this.leg([p0, { x: H.x0 - 9, z: p0.z }, { x: H.x0 - 28, z: L.LANE_IN }, a], { r: 8 })
+      const curve = this.leg(
         [a, { x: dock.x - 6.6, z: L.LANE_IN - 1.1 }, { x: dock.x - 1.7, z: L.LANE_IN - 4.6 }, { x: dock.x, z: L.LANE_IN - 9.5 }, { x: dock.x, z: L.DOCKED_Z + 2.5 }, { x: dock.x, z: L.DOCKED_Z }],
-        true,
+        { smooth: true, reverse: true, zone: tr.id, vmax: TRUCK_REVERSE },
       )
-      const m2 = motion(curve, motionEnd(m1) + 5, TRUCK_REVERSE, true)
-      tr.plan = [m1, m2]
-      this.retargetLane(lane, t)
+      tr.mv.legs = [approach, curve]
+      tr.mv.s = 0
     }
   }
 
-  private depart(tr: Truck, t: number) {
+  private depart(tr: Truck, t: number): boolean {
     const Lg = this.layout
-    const ship = this.shipOf(tr)
     const dock = this.docks.find((d) => d.id === tr.dockId)!
+    if (!this.reserveZone(tr.id, L.departZone(dock.x), true)) return false
+    const ship = this.shipOf(tr)
     dock.truckId = null
     dock.turns++
     if (ship.dockedAt != null) dock.serviceSum += t - ship.dockedAt
@@ -684,7 +794,7 @@ export class Site {
     tr.phase = 'departing'
     tr.departAt = t
     tr.dockId = null
-    const curve = new Path(
+    const curve = this.leg(
       [
         { x: dock.x, z: L.DOCKED_Z },
         { x: dock.x, z: L.DOCKED_Z + 5 },
@@ -692,14 +802,18 @@ export class Site {
         { x: dock.x - 2.6, z: 29.5 },
         { x: dock.x - 8.5, z: 34.6 },
         { x: dock.x - 17, z: L.LANE_OUT },
+        { x: dock.x - 34, z: L.LANE_OUT },
       ],
-      true,
+      { smooth: true, zone: tr.id },
     )
-    tr.plan = [motion(Path.join(curve, [{ x: Lg.exitX, z: L.LANE_OUT }]), t + 4, TRUCK_SPEED)]
+    const road = this.leg([{ x: dock.x - 34, z: L.LANE_OUT }, { x: Lg.exitX, z: L.LANE_OUT }])
+    tr.mv.legs = [curve, road]
+    tr.mv.s = 0
     if (dock.maintPending) {
       dock.maintPending = false
       this.startMaint(dock, t, this.rng.range(40, 80) * 60)
     }
+    return true
   }
 
   // ───────── 도크 점검 ─────────
@@ -724,15 +838,91 @@ export class Site {
   }
 
   // ───────── 지게차 ─────────
-  private flMotion(f: Forklift, to: L.Loc, t: number): Motion {
-    const path = new Path(L.route(f.pose, to, this.layout))
-    f.distance += path.length
-    f.battery = Math.max(0, f.battery - path.length * 0.0075)
-    return motion(path, t, FL_SPEED)
+  // 통로에서는 우측통행, 앞에 다른 지게차가 있으면 멈춘다. 일이 없으면 벽 쪽 주차 칸으로 빠진다.
+  // 도크 앞 구역 안에 있으면 그 도크 id
+  // 앞쪽 작업 베이(도크 열·주차·충전) 안인지: 이 영역은 열 단위로 직진 진입·후진 진출
+  private dockAtPoint(p: Vec2): boolean {
+    return p.z > L.dockApproachZ(this.layout) + 0.6
+  }
+  private flGo(f: Forklift, to: L.Loc) {
+    const Lg = this.layout
+    const legs: Leg[] = []
+    let from: Vec2 = f.mv.pose
+    const az = L.dockApproachZ(Lg)
+    const fromDock = this.dockAtPoint(from)
+    if (fromDock) {
+      // 도크 열에서는 후진으로 똑바로 빠져나온다
+      const out = { x: from.x, z: az }
+      legs.push({ path: new Path([from, out]), vmax: 0.4, reverse: true, zone: null })
+      from = out
+    }
+    const toDock = this.dockAtPoint(to)
+    const mid = toDock ? { x: to.x, z: az } : to
+    const raw = L.route(from, mid, Lg)
+    const pts = L.keepRight(raw, 0.8, { straightFirst: !!fromDock, straightLast: !!toDock })
+    const main = new Path(pts)
+    if (main.length > 0.05) legs.push({ path: main, vmax: FL_SPEED, reverse: false, zone: null })
+    if (toDock) legs.push({ path: new Path([mid, to]), vmax: 0.45, reverse: false, zone: null })
+    const total = legs.reduce((a, l) => a + l.path.length, 0)
+    f.distance += total
+    f.battery = Math.max(0, f.battery - total * 0.0075)
+    f.mv.legs = legs
+    f.mv.s = 0
+    f.target = to
+    f.resumeAt = null
+  }
+  // 교착 해소 1순위: 다른 지게차를 장애물로 본 A* 우회 경로
+  private detour(f: Forklift): boolean {
+    const Lg = this.layout
+    const tgt = f.target
+    if (!tgt || this.dockAtPoint(f.mv.pose)) return false
+    const others = this.forklifts.filter((x) => x !== f).map((x) => obbAt(x.mv, x.mv.pose))
+    this.grid.markObstacles(others, 0.75)
+    const toDock = this.dockAtPoint(tgt)
+    const az = L.dockApproachZ(Lg)
+    const goal = toDock ? { x: tgt.x, z: az } : tgt
+    const pts = this.grid.plan(f.mv.pose, goal)
+    if (!pts || pts.length < 2) return false
+    const legs: Leg[] = [{ path: new Path(pts), vmax: FL_SPEED * 0.8, reverse: false, zone: null }]
+    if (toDock) legs.push({ path: new Path([goal, tgt]), vmax: 0.45, reverse: false, zone: null })
+    f.mv.legs = legs
+    f.mv.s = 0
+    f.mv.waitFrom = null
+    f.resumeAt = null
+    this.detours++
+    return true
+  }
+
+  // 교착 해소 2순위: 뒤로 2.5m 물러난 뒤 잠시 기다렸다 다시 경로를 잡는다
+  private backOff(f: Forklift, t: number): boolean {
+    const Lg = this.layout
+    const p = f.mv.pose
+    const leg = f.mv.legs[0]
+    if (!leg || leg.zone || !f.target) return false
+    const tip = leg.path.sample(f.mv.s + 0.5)
+    const n = Math.hypot(tip.dx, tip.dz) || 1
+    const back = { x: p.x - (tip.dx / n) * 2.6, z: p.z - (tip.dz / n) * 2.6 }
+    if (!L.isInside(Lg, back) || back.z > L.dockZoneZ0(Lg) - 0.5 || p.z > L.dockZoneZ0(Lg) - 0.5) return false
+    for (const r of Lg.rows) {
+      for (const sx of Lg.sectionX0) if (back.x > sx - 1 && back.x < sx + L.SECTION_W + 1 && Math.abs(back.z - r.z) < 1.5) return false
+    }
+    const probe = obbAt(f.mv, { ...back, heading: p.heading })
+    for (const o of this.flObbs.values()) if (o.id !== f.id && obbOverlap(probe, o)) return false
+    f.mv.legs = [{ path: new Path([p, back]), vmax: 0.45, reverse: true, zone: null }]
+    f.mv.s = 0
+    f.resumeAt = t + 3
+    this.backoffs++
+    return true
   }
   private arriveAt(f: Forklift, loc: L.Loc) {
-    f.pose = { x: loc.x, z: loc.z, heading: loc.heading }
-    f.plan = null
+    f.mv.pose = { x: loc.x, z: loc.z, heading: loc.heading }
+    f.mv.legs = []
+    this.flObbs.set(f.id, obbAt(f.mv, f.mv.pose))
+  }
+  private releasePark(f: Forklift) {
+    f.parkKey = null
+    f.parkLoc = null
+    f.parked = false
   }
   private opHeight(f: Forklift, kind: 'pick' | 'drop'): number {
     const task = f.task!
@@ -749,15 +939,95 @@ export class Site {
     else if (b.stock === LOW_STOCK && prev > LOW_STOCK) this.log(t, 'warn', `${b.code} 재고 부족 (${b.stock} PLT) · ${b.name}`, { kind: 'bay', id: String(b.idx) })
   }
 
+  // 박스에 들어가려면: 박스가 비어 있고(또는 내가 소유), 박스를 빠져나간 자리도 비어 있어야 한다
+  private boxGate(m: Mover, leg: Leg, ds: number, fut: OBB, cur: OBB): string | null {
+    for (const b of this.boxes) {
+      if (!obbRect(fut, b.r) || obbRect(cur, b.r)) continue
+      if (b.owner && b.owner !== m.id) return `box:${b.owner}`
+      for (const o of this.flObbs.values()) if (o.id !== m.id && obbRect(o, b.r)) return o.id
+      // 출구 확인: 경로를 따라 박스를 완전히 벗어나는 지점까지 가 보고, 그 자리가 비었는지
+      let s = m.s + ds
+      let out: OBB | null = null
+      for (let k = 0; k < 40 && s <= leg.path.length; k++, s += 0.5) {
+        const o = obbAt(m, legPose(leg, s, m.pose.heading))
+        if (!obbRect(o, b.r)) {
+          out = obbAt(m, legPose(leg, Math.min(leg.path.length, s + 0.6), m.pose.heading))
+          break
+        }
+      }
+      if (out) for (const o of this.flObbs.values()) if (o.id !== m.id && obbOverlap(out, o)) return o.id
+      b.owner = m.id
+    }
+    return null
+  }
+
   private stepForklifts(t: number) {
+    this.flObbs.clear()
     for (const f of this.forklifts) {
-      const planDone = !f.plan || t >= motionEnd(f.plan)
+      f.mv.prev = f.mv.pose
+      this.flObbs.set(f.id, obbAt(f.mv, f.mv.pose))
+    }
+    for (const b of this.boxes) {
+      if (!b.owner) continue
+      const o = this.flObbs.get(b.owner)
+      if (!o || !obbRect(o, b.r)) b.owner = null
+    }
+    const env: StepEnv = {
+      t,
+      obbs: this.flObbs,
+      zones: [],
+      canStartZone: (m, zone) => {
+        const owner = this.flZoneOwner.get(zone)
+        if (owner && owner !== m.id) return false
+        this.flZoneOwner.set(zone, m.id)
+        return true
+      },
+      movers: new Map(this.forklifts.map((f) => [f.id, f.mv])),
+      gate: (m, leg, ds, fut, cur) => this.boxGate(m, leg, ds, fut, cur),
+    }
+    const byId = new Map(this.forklifts.map((f) => [f.id, f]))
+    for (const f of this.forklifts) {
+      if (f.mv.legs.length) {
+        const zone = f.mv.legs[0].zone
+        const done = stepMover(f.mv, env)
+        if (done && zone && this.flZoneOwner.get(zone) === f.id) this.flZoneOwner.delete(zone)
+      }
+      if (!f.mv.legs.length && f.resumeAt != null) {
+        if (t >= f.resumeAt && f.target) this.flGo(f, f.target)
+        continue
+      }
+      if (f.mv.waitFrom != null && t - f.mv.waitFrom >= 3 && (t & 3) === 0 && t - f.lastFix > 15) {
+        // 대기 그래프 따라가기: 나에게 돌아오면 순환 교착 → 한 대를 물러나게
+        const cyc: Forklift[] = [f]
+        let cur = f.mv.blocker ? byId.get(f.mv.blocker) : undefined
+        while (cur && cur !== f && cyc.length < 12 && !cyc.includes(cur)) {
+          cyc.push(cur)
+          cur = cur.mv.blocker ? byId.get(cur.mv.blocker) : undefined
+        }
+        if (cur === f) {
+          const order = [...cyc].sort((a, b) => (a.id < b.id ? 1 : -1))
+          for (const c of cyc) c.lastFix = t
+          for (const c of order) if (this.backOff(c, t)) break
+        } else if (t - f.mv.waitFrom >= 90) {
+          // 순환은 아니지만 오래 막힘 → 우회 경로 시도
+          f.lastFix = t
+          this.detour(f)
+        }
+      }
+      const arrived = !f.mv.legs.length
       switch (f.state) {
         case 'idle':
           f.battery = Math.max(0, f.battery - 0.0012)
           break
+        case 'toPark':
+          if (arrived) {
+            this.arriveAt(f, f.parkLoc ?? f.mv.pose)
+            f.state = 'idle'
+            f.parked = true
+          }
+          break
         case 'toPick':
-          if (planDone) {
+          if (arrived) {
             this.arriveAt(f, f.task!.pick)
             f.state = 'picking'
             f.opStart = t
@@ -781,11 +1051,11 @@ export class Site {
           }
           if (t >= f.until) {
             f.state = 'toDrop'
-            f.plan = this.flMotion(f, f.task!.drop, t)
+            this.flGo(f, f.task!.drop)
           }
           break
         case 'toDrop':
-          if (planDone) {
+          if (arrived) {
             this.arriveAt(f, f.task!.drop)
             f.state = 'dropping'
             f.opStart = t
@@ -817,7 +1087,7 @@ export class Site {
           }
           break
         case 'toCharge':
-          if (planDone) {
+          if (arrived) {
             this.arriveAt(f, this.layout.chargers[f.chargerIdx ?? 0])
             f.state = 'charging'
           }
@@ -850,6 +1120,7 @@ export class Site {
     f.task = null
     f.carrying = false
     f.state = 'idle'
+    f.parked = false
   }
 
   // 작업 중 고장: 들고 있던 팔레트를 원위치로 되돌리고 라인을 재배정 대상으로 돌린다
@@ -876,26 +1147,26 @@ export class Site {
   private dispatch(t: number) {
     const Lg = this.layout
     for (const f of this.forklifts) {
-      if (f.state !== 'idle' || f.battery >= BATTERY_LOW) continue
+      if ((f.state !== 'idle' && f.state !== 'toPark') || f.battery >= BATTERY_LOW) continue
       const used = new Set(this.forklifts.map((x) => x.chargerIdx).filter((x) => x != null))
       let ci: number | null = null
       let best = Infinity
       Lg.chargers.forEach((c, i) => {
         if (used.has(i)) return
-        const d = Math.abs(c.x - f.pose.x) + Math.abs(c.z - f.pose.z)
+        const d = Math.abs(c.x - f.mv.pose.x) + Math.abs(c.z - f.mv.pose.z)
         if (d < best) {
           best = d
           ci = i
         }
       })
       if (ci == null) continue
+      this.releasePark(f)
       f.chargerIdx = ci
       f.state = 'toCharge'
-      f.plan = this.flMotion(f, Lg.chargers[ci], t)
+      this.flGo(f, Lg.chargers[ci])
       this.log(t, 'info', `${f.id} 배터리 ${Math.round(f.battery)}% · 충전소 이동`, { kind: 'forklift', id: f.id })
     }
-    const avail = this.forklifts.filter((f) => f.state === 'idle' && f.battery >= BATTERY_LOW)
-    if (!avail.length) return
+    const avail = this.forklifts.filter((f) => (f.state === 'idle' || f.state === 'toPark') && f.battery >= BATTERY_LOW)
     const docked = [...this.trucks.values()]
       .filter((tr) => tr.phase === 'docked' && tr.sealAt == null)
       .sort((a, b) => Number(this.shipOf(b).urgent) - Number(this.shipOf(a).urgent) || (this.shipOf(a).dockedAt ?? 0) - (this.shipOf(b).dockedAt ?? 0))
@@ -903,19 +1174,31 @@ export class Site {
       if (!avail.length) break
       const ship = this.shipOf(tr)
       const dock = this.docks.find((d) => d.id === tr.dockId)!
-      const max = ship.urgent ? 4 : ship.pallets >= 16 ? 3 : 2
+      const max = 2
       let active = this.forklifts.filter((f) => f.task?.truckId === tr.id).length
       while (active < max && avail.length) {
         const li = ship.lines.findIndex((l) => l.qty - l.done - l.flight > 0)
         if (li < 0) break
-        avail.sort((a, b) => Math.abs(a.pose.x - dock.x) + Math.abs(a.pose.z - L.DOCK_LOC_Z) - (Math.abs(b.pose.x - dock.x) + Math.abs(b.pose.z - L.DOCK_LOC_Z)))
+        avail.sort((a, b) => Math.abs(a.mv.pose.x - dock.x) + Math.abs(a.mv.pose.z - L.DOCK_LOC_Z) - (Math.abs(b.mv.pose.x - dock.x) + Math.abs(b.mv.pose.z - L.DOCK_LOC_Z)))
         const f = avail.shift()!
+        this.releasePark(f)
         const line = ship.lines[li]
         line.flight++
         const bay = this.bays[line.bay]
         const row = Lg.rows[bay.row]
-        const used = new Set(this.forklifts.filter((x) => x.task?.truckId === tr.id).map((x) => x.task!.lane))
-        const lane = [0, -1.15, 1.15, 0.6].find((l) => !used.has(l)) ?? 0
+        const used = new Set<number>()
+        for (const x of this.forklifts) {
+          if (x === f) continue
+          if (x.task?.dockId === dock.id) used.add(x.task.lane)
+          const p = x.mv.pose
+          if (p.z > L.dockZoneZ0(Lg) - 0.3 && Math.abs(p.x - dock.x) < 1.9) used.add(p.x < dock.x ? -0.8 : 0.8)
+        }
+        const lane = [-0.8, 0.8].find((l) => !used.has(l))
+        if (lane == null) {
+          avail.unshift(f)
+          line.flight--
+          break
+        }
         const dockLoc: L.Loc = { x: dock.x + lane, z: L.DOCK_LOC_Z, heading: 0 }
         const bayLoc: L.Loc = { x: bay.x, z: row.aisleZ, heading: row.facing }
         f.task = {
@@ -930,10 +1213,44 @@ export class Site {
           lane,
         }
         f.state = 'toPick'
-        f.plan = this.flMotion(f, f.task.pick, t)
+        this.flGo(f, f.task.pick)
         active++
       }
     }
+    // 남는 지게차는 대기 베이로: 앞쪽 양 끝 주차 칸, 모자라면 트럭 없는 도크의 지게차 열
+    for (const f of this.forklifts) {
+      if (f.state !== 'idle' || f.parked || f.parkKey != null) continue
+      const spot = this.pickParking(f)
+      if (!spot) continue
+      f.parkKey = spot.key
+      f.parkLoc = spot.loc
+      f.state = 'toPark'
+      this.flGo(f, spot.loc)
+    }
+  }
+
+  private pickParking(f: Forklift, preferBay = false): { key: string; loc: L.Loc } | null {
+    const Lg = this.layout
+    const taken = new Set(this.forklifts.filter((x) => x !== f).map((x) => x.parkKey).filter((x) => x != null))
+    const occupied = (loc: L.Loc) => this.forklifts.some((x) => x !== f && Math.abs(x.mv.pose.x - loc.x) < 1.3 && Math.abs(x.mv.pose.z - loc.z) < 2.5)
+    const cands: { key: string; loc: L.Loc }[] = Lg.flPark.map((loc, i) => ({ key: `P${i}`, loc }))
+    if (!preferBay)
+      for (const d of this.docks) {
+        if (d.truckId || d.maintUntil != null) continue
+        for (const lane of [-0.8, 0.8]) cands.push({ key: `${d.id}:${lane}`, loc: { x: d.x + lane, z: L.DOCK_LOC_Z, heading: 0 } })
+      }
+    let best: { key: string; loc: L.Loc } | null = null
+    let bd = Infinity
+    for (const c of cands) {
+      if (taken.has(c.key) || occupied(c.loc)) continue
+      if (c.key.startsWith('D') && this.forklifts.some((x) => x.task && x.task.dockId === c.key.split(':')[0])) continue
+      const d = Math.abs(c.loc.x - f.mv.pose.x) + Math.abs(c.loc.z - f.mv.pose.z) + (c.key.startsWith('P') ? 0 : 12)
+      if (d < bd) {
+        bd = d
+        best = c
+      }
+    }
+    return best
   }
 
   // ───────── 작업자 ─────────
@@ -1064,13 +1381,13 @@ export class Site {
 
     for (const tr of this.trucks.values()) {
       if (tr.phase === 'enroute') {
-        if (t >= tr.spawnAt) this.spawn(tr, t)
+        if (t >= tr.spawnAt) {
+          const sx = this.layout.spawnX
+          const busy = [...this.trucks.values()].some((o) => o !== tr && o.phase !== 'enroute' && o.phase !== 'gone' && Math.abs(o.mv.pose.z - L.LANE_IN) < 3 && o.mv.pose.x > sx - 26)
+          if (busy) tr.spawnAt = t + 3
+          else this.spawn(tr, t)
+        }
         continue
-      }
-      if (tr.plan.length && t >= motionEnd(tr.plan[tr.plan.length - 1])) {
-        tr.pose = this.truckPose(tr, t)
-        tr.plan = []
-        this.onTruckPlanDone(tr, t)
       }
       if (tr.phase === 'docked') {
         const ship = this.shipOf(tr)
@@ -1083,6 +1400,7 @@ export class Site {
       }
     }
 
+    this.stepTrucks(t)
     this.assignDocks(t)
     this.stepForklifts(t)
     if ((t & 1) === 1) this.dispatch(t)
@@ -1105,7 +1423,7 @@ export class Site {
       if (d.truckId && this.trucks.get(d.truckId)?.phase === 'docked') d.busySec++
     }
 
-    const waiting = this.lanes.reduce((s, q) => s + q.length, 0)
+    const waiting = this.lanes.reduce((s, q) => s + q.length, 0) + this.roadWait.length
     if (waiting >= 8 && !this.queueAlert) {
       this.queueAlert = true
       this.log(t, 'warn', `트럭 대기장 ${waiting}대 · 도크 배정 지연`, { kind: 'facility', id: 'lot' })
@@ -1115,7 +1433,7 @@ export class Site {
   }
 
   // 실제 값 = heat[i] * heatScale. 감쇠는 스케일만 줄여 O(1)로 처리
-  private recordHeat(t: number) {
+  private recordHeat(_t: number) {
     const G = this.layout.heat
     const decay = 0.99981 // 반감기 약 2시간
     const h = this.heat
@@ -1127,8 +1445,8 @@ export class Site {
     }
     const inv = 1 / this.heatScale
     for (const f of this.forklifts) {
-      if (!f.plan || t >= motionEnd(f.plan)) continue
-      const p = poseOn(f.plan, t, f.pose.heading)
+      if (f.mv.v <= 0) continue
+      const p = f.mv.pose
       const cx = Math.floor((p.x - G.x0) / G.cell)
       const cz = Math.floor((p.z - G.z0) / G.cell)
       for (let dz = -1; dz <= 1; dz++)
@@ -1178,10 +1496,17 @@ export class Site {
         const pool = busy.length ? busy : this.forklifts.filter((f) => f.state !== 'down')
         if (!pool.length) return { ok: false, text: '정지시킬 지게차가 없습니다.', ref: null }
         const f = this.rng.pick(pool)
-        f.pose = this.forkliftPose(f, t)
         this.abortTask(f, t)
-        f.plan = null
         f.chargerIdx = null
+        this.releasePark(f)
+        // 비상 정지 후 가장 가까운 정비(주차) 위치로 서행 이동
+        const spot = this.pickParking(f, true) ?? this.pickParking(f)
+        if (spot) {
+          f.parkKey = spot.key
+          f.parkLoc = spot.loc
+          this.flGo(f, spot.loc)
+          for (const l of f.mv.legs) l.vmax = Math.min(l.vmax, 0.3)
+        }
         f.state = 'down'
         const dur = this.rng.range(35, 50) * 60
         f.downUntil = t + dur
@@ -1211,6 +1536,36 @@ export class Site {
     }
   }
 
+  // 검증용: 서로 겹친 차체 쌍 수 (도크에 붙은 트럭끼리는 물리적으로 떨어져 있으므로 포함해도 0이어야 한다)
+  overlaps(): { trucks: number; forklifts: number; pairs: string[] } {
+    const pairs: string[] = []
+    const tr = [...this.trucks.values()].filter((x) => x.phase !== 'enroute' && x.phase !== 'gone')
+    let a = 0
+    for (let i = 0; i < tr.length; i++)
+      for (let j = i + 1; j < tr.length; j++) {
+        const A = obbAt(tr[i].mv, tr[i].mv.pose)
+        const B = obbAt(tr[j].mv, tr[j].mv.pose)
+        if (Math.abs(A.cx - B.cx) > 20 || Math.abs(A.cz - B.cz) > 20) continue
+        if (obbOverlap({ ...A, hl: A.hl - 0.05, hw: A.hw - 0.05 }, { ...B, hl: B.hl - 0.05, hw: B.hw - 0.05 })) {
+          a++
+          if (pairs.length < 6) pairs.push(`${tr[i].id}(${tr[i].phase})×${tr[j].id}(${tr[j].phase})`)
+        }
+      }
+    let b = 0
+    const fl = this.forklifts
+    for (let i = 0; i < fl.length; i++)
+      for (let j = i + 1; j < fl.length; j++) {
+        const A = obbAt(fl[i].mv, fl[i].mv.pose)
+        const B = obbAt(fl[j].mv, fl[j].mv.pose)
+        if (Math.abs(A.cx - B.cx) > 6 || Math.abs(A.cz - B.cz) > 6) continue
+        if (obbOverlap({ ...A, hl: A.hl - 0.05, hw: A.hw - 0.05 }, { ...B, hl: B.hl - 0.05, hw: B.hw - 0.05 })) {
+          b++
+          if (pairs.length < 12) pairs.push(`${fl[i].id}(${fl[i].state})×${fl[j].id}(${fl[j].state})`)
+        }
+      }
+    return { trucks: a, forklifts: b, pairs }
+  }
+
   // ───────── KPI ─────────
   kpis(t: number) {
     const opDocks = this.docks.filter((d) => d.maintUntil == null)
@@ -1220,7 +1575,7 @@ export class Site {
     const out = this.bays.filter((b) => b.stock <= 0).length
     const low = this.bays.filter((b) => b.stock > 0 && b.stock <= LOW_STOCK).length
     const totalStock = this.bays.reduce((s, b) => s + b.stock, 0)
-    const active = this.forklifts.filter((f) => f.state !== 'idle' && f.state !== 'charging' && f.state !== 'toCharge' && f.state !== 'down').length
+    const active = this.forklifts.filter((f) => f.state !== 'idle' && f.state !== 'toPark' && f.state !== 'charging' && f.state !== 'toCharge' && f.state !== 'down').length
     const down = this.forklifts.filter((f) => f.state === 'down').length
     const onBreak = this.workers.filter((w) => w.activity === '휴게 중').length
     const onFloor = this.workers.filter((w) => w.visible).length

@@ -13,8 +13,8 @@ export const AISLE_W = 3.2
 export const RACK_H = LEVELS * LEVEL_H + 0.2
 export const SECTION_W = BAYS_PER_SECTION * BAY_W
 export const SECTION_GAP = 4
-export const SIDE = 5.2
-export const FRONT = 14 // 마지막 랙 열 ~ 도크 벽 사이 작업 공간
+export const SIDE = 7.2 // 벽 쪽 교차 통로 + 지게차 대기 주차 칸
+export const FRONT = 18 // 마지막 랙 열 ~ 도크 벽 사이 작업 공간
 
 export const DOCK_WALL_Z = 13
 export const DOCK_LOC_Z = 11.2
@@ -62,6 +62,7 @@ export interface Layout {
   corridorZ: number
   dockXs: number[]
   chargers: Loc[]
+  flPark: Loc[]
   wall: { x0: number; x1: number; z0: number; z1: number }
   width: number
   depth: number
@@ -96,7 +97,7 @@ export function makeLayout(spec: LayoutSpec): Layout {
   const x0 = -width / 2
   const x1 = width / 2
   const sectionX0 = Array.from({ length: n }, (_, s) => x0 + SIDE + s * (SECTION_W + SECTION_GAP))
-  const crossX = [x0 + SIDE / 2, ...sectionX0.slice(0, -1).map((sx) => sx + SECTION_W + SECTION_GAP / 2), x1 - SIDE / 2]
+  const crossX = [x0 + 3.6, ...sectionX0.slice(0, -1).map((sx) => sx + SECTION_W + SECTION_GAP / 2), x1 - 3.6]
 
   const k = spec.rows / 2
   const rowsEndZ = DOCK_WALL_Z - FRONT
@@ -125,21 +126,29 @@ export function makeLayout(spec: LayoutSpec): Layout {
   }
   const corridorZ = rowsEndZ + 2.6
 
-  const span = width / 2 - 6
+  const span = width / 2 - 20 // 양 끝 8m+는 지게차 충전·주차 베이
   const dockXs = Array.from({ length: spec.docks }, (_, i) => (spec.docks === 1 ? 0 : -span + (2 * span * i) / (spec.docks - 1)))
 
+  // 앞쪽 양 끝 베이: 벽 쪽부터 충전기, 이어서 주차 칸 (모두 북향, 열 단위로 직진 진입)
   const perSide = Math.ceil(spec.chargers / 2)
+  const spotZ = DOCK_LOC_Z
+  const bayEnd = span + 2.45 + 1.0 // 첫/끝 도크 작업 구역 바깥
+  const cols: number[] = []
+  for (let x = width / 2 - 1.3; x > bayEnd; x -= 1.95) cols.push(x)
   const chargers: Loc[] = []
-  for (let i = 0; i < spec.chargers; i++) {
-    const west = i < perSide
-    const j = west ? i : i - perSide
-    chargers.push({ x: west ? x0 + 1.9 : x1 - 1.9, z: corridorZ + 2.4 + j * 2.2, heading: west ? -Math.PI / 2 : Math.PI / 2 })
+  const flPark: Loc[] = []
+  for (const side of [-1, 1]) {
+    cols.forEach((cx, i) => {
+      const loc = { x: side * cx, z: spotZ, heading: 0 }
+      if (i < perSide) chargers.push(loc)
+      else flPark.push(loc)
+    })
   }
 
   const hx0 = x1 + 26
-  const gap = 14.5
+  const gap = 16.5
   const perLane = 5
-  const eastX = hx0 + (perLane - 1) * gap
+  const eastX = hx0 + perLane * gap
   const entryX = eastX + 22
   const gateX = entryX + 26
   const exitGateX = x0 - 52
@@ -161,6 +170,7 @@ export function makeLayout(spec: LayoutSpec): Layout {
     corridorZ,
     dockXs,
     chargers,
+    flPark,
     wall: { x0, x1, z0, z1: DOCK_WALL_Z },
     width,
     depth,
@@ -226,6 +236,89 @@ export function walkRoute(from: Vec2, to: Vec2, L: Layout): Vec2[] {
   if (a && !b) return [...route(from, L.pedIn, L), L.pedOut, to]
   if (!a && b) return [from, L.pedOut, ...route(L.pedIn, to, L)]
   return [from, to]
+}
+
+// 우측통행: 경로 중간 구간을 진행 방향 오른쪽으로 off만큼 민다 (시작·끝 점은 그대로)
+export function keepRight(points: Vec2[], off: number, opts: { straightFirst?: boolean; straightLast?: boolean } = {}): Vec2[] {
+  const p: Vec2[] = []
+  for (const q of points) if (!p.length || Math.hypot(q.x - p[p.length - 1].x, q.z - p[p.length - 1].z) > 1e-3) p.push(q)
+  if (p.length < 2) return p
+  const n = p.length
+  const dir = (i: number) => {
+    const dx = p[i + 1].x - p[i].x
+    const dz = p[i + 1].z - p[i].z
+    const l = Math.hypot(dx, dz) || 1
+    return { dx: dx / l, dz: dz / l, l }
+  }
+  const nrm = (d: { dx: number; dz: number }) => ({ x: -d.dz * off, z: d.dx * off })
+  const out: Vec2[] = [p[0]]
+  const d0 = dir(0)
+  if (opts.straightFirst && n > 2) {
+    // 첫 구간은 오프셋 없이 똑바로 (도크 열에서 빠져나오는 구간)
+    const d1 = dir(1)
+    const nn = nrm(d1)
+    out.push({ x: p[1].x, z: p[1].z })
+    out.push({ x: p[1].x + d1.dx * Math.min(1.6, d1.l / 2) + nn.x, z: p[1].z + d1.dz * Math.min(1.6, d1.l / 2) + nn.z })
+    for (let i = 2; i < n - 1; i++) {
+      const a = nrm(dir(i - 1))
+      const b = nrm(dir(i))
+      out.push({ x: p[i].x + a.x + b.x, z: p[i].z + a.z + b.z })
+    }
+    const dl = dir(n - 2)
+    if (!opts.straightLast && dl.l > 2.4) {
+      const ln = nrm(dl)
+      out.push({ x: p[n - 1].x - dl.dx * 1.1 + ln.x, z: p[n - 1].z - dl.dz * 1.1 + ln.z })
+    }
+    out.push(p[n - 1])
+    return out
+  }
+  if (d0.l > 2.4) {
+    const nn = nrm(d0)
+    out.push({ x: p[0].x + d0.dx * 1.1 + nn.x, z: p[0].z + d0.dz * 1.1 + nn.z })
+  }
+  for (let i = 1; i < n - 1; i++) {
+    const a = nrm(dir(i - 1))
+    const b = nrm(dir(i))
+    out.push({ x: p[i].x + a.x + b.x, z: p[i].z + a.z + b.z })
+  }
+  const dl = dir(n - 2)
+  if (opts.straightLast && n > 2) {
+    // 마지막 구간은 오프셋 없이 똑바로 (도크 열로 들어가는 구간)
+    const dp = dir(n - 3)
+    const pn = nrm(dp)
+    out.pop()
+    out.push({ x: p[n - 2].x - dp.dx * Math.min(1.6, dp.l / 2) + pn.x, z: p[n - 2].z - dp.dz * Math.min(1.6, dp.l / 2) + pn.z })
+    out.push({ x: p[n - 2].x, z: p[n - 2].z })
+  } else if (dl.l > 2.4) {
+    const nn = nrm(dl)
+    out.push({ x: p[n - 1].x - dl.dx * 1.1 + nn.x, z: p[n - 1].z - dl.dz * 1.1 + nn.z })
+  }
+  out.push(p[n - 1])
+  return out
+}
+
+// 후진 접안 구역: 차선 위 진입 지점 ~ 도크 앞까지 (다른 트럭은 소유자가 들어오면 진입 금지)
+export function reverseZone(dockX: number, len: number) {
+  return [
+    { x0: dockX - 13 - len - 1, x1: dockX + 2.2, z0: LANE_IN - 3.4, z1: LANE_IN + 2.6 },
+    { x0: dockX - 9, x1: dockX + 2.2, z0: 24, z1: LANE_IN - 3.4 },
+    { x0: dockX - 1.7, x1: dockX + 1.7, z0: DOCK_WALL_Z, z1: 24 },
+  ]
+}
+
+// 출차 구역: 도크 앞 ~ 두 차선을 가로질러 출차 차선까지
+export function departZone(dockX: number) {
+  return [
+    { x0: dockX - 1.7, x1: dockX + 1.7, z0: DOCK_WALL_Z, z1: 26 },
+    { x0: dockX - 30, x1: dockX + 2.2, z0: 26, z1: LANE_OUT + 2.2 },
+  ]
+}
+
+// 도크 앞 지게차 작업 구역 (이동 중인 지게차는 한 번에 1대만)
+export const dockZoneZ0 = (L: Layout) => L.corridorZ + 5.2
+export const dockApproachZ = (L: Layout) => L.corridorZ + 4.6
+export function dockZoneRect(L: Layout, dockX: number) {
+  return { x0: dockX - 2.45, x1: dockX + 2.45, z0: dockZoneZ0(L), z1: DOCK_WALL_Z }
 }
 
 export const holdingSlot = (L: Layout, lane: number, i: number): Vec2 => ({ x: L.holding.x0 + i * L.holding.gap, z: L.holding.laneZ[lane] })
