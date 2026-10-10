@@ -71,7 +71,7 @@ function Ring({ site, sel, variant }: { site: Site; sel: Sel; variant: 'sel' | '
   return (
     <mesh ref={ref} rotation-x={-Math.PI / 2} renderOrder={onTop ? 10 : 2}>
       <ringGeometry args={[0.9, 1, 72]} />
-      <meshBasicMaterial color={variant === 'sel' ? P.ink : P.hover} transparent opacity={variant === 'sel' ? 0.95 : 0.55} depthWrite={false} depthTest={!onTop} />
+      <meshBasicMaterial color={variant === 'sel' ? P.pin : P.hover} transparent opacity={variant === 'sel' ? 0.95 : 0.55} depthWrite={false} depthTest={!onTop} />
     </mesh>
   )
 }
@@ -83,11 +83,11 @@ function BayBox({ site, idx, variant }: { site: Site; idx: number; variant: 'sel
   return (
     <group position={[b.x, (L.RACK_H + 0.25) / 2, b.z]}>
       <lineSegments geometry={edges}>
-        <lineBasicMaterial color={variant === 'sel' ? P.ink : P.hover} />
+        <lineBasicMaterial color={variant === 'sel' ? P.pin : P.hover} />
       </lineSegments>
       <mesh>
         <boxGeometry args={[L.BAY_W + 0.1, L.RACK_H + 0.25, 1.5]} />
-        <meshBasicMaterial color={P.ink} transparent opacity={variant === 'sel' ? 0.1 : 0.05} depthWrite={false} />
+        <meshBasicMaterial color={variant === 'sel' ? P.pin : P.ink} transparent opacity={variant === 'sel' ? 0.12 : 0.05} depthWrite={false} />
       </mesh>
     </group>
   )
@@ -96,6 +96,45 @@ function BayBox({ site, idx, variant }: { site: Site; idx: number; variant: 'sel
 function Marker({ site, sel, variant }: { site: Site; sel: Sel; variant: 'sel' | 'hover' }) {
   if (sel.kind === 'bay') return <BayBox site={site} idx={Number(sel.id)} variant={variant} />
   return <Ring site={site} sel={sel} variant={variant} />
+}
+
+// 고른 대상 위에 떠서 위아래로 천천히 움직이는 파란 지도 핀
+const pinHead = new THREE.SphereGeometry(0.62, 24, 16)
+const pinTip = (() => {
+  const g = new THREE.ConeGeometry(0.42, 1.15, 20)
+  g.rotateX(Math.PI)
+  return g
+})()
+const pinDot = new THREE.SphereGeometry(0.26, 16, 12)
+const pinMat = new THREE.MeshStandardMaterial({ color: P.pin, roughness: 0.35, metalness: 0.05, emissive: new THREE.Color(P.pin), emissiveIntensity: 0.18 })
+const pinDotMat = new THREE.MeshBasicMaterial({ color: '#ffffff' })
+
+function Pin({ site, sel }: { site: Site; sel: Sel }) {
+  const ref = useRef<THREE.Group>(null)
+  const born = useRef(performance.now())
+  useFrame(() => {
+    const g = ref.current
+    if (!g) return
+    const a = selAnchor(site, sel, world.time)
+    g.visible = !!a
+    if (!a) return
+    const now = performance.now()
+    // 나타날 때 위에서 살짝 떨어지며 커지고, 이후 천천히 위아래로
+    const u = Math.min(1, (now - born.current) / 380)
+    const enter = 1 - (1 - u) ** 3
+    const bob = Math.sin(now / 520) * 0.22
+    g.position.set(a.x, a.top + 1.9 + bob + (1 - enter) * 1.2, a.z)
+    g.scale.setScalar((0.4 + 0.6 * enter) * 1.3)
+    g.rotation.y = now / 1400
+  })
+  return (
+    <group ref={ref}>
+      <mesh geometry={pinHead} material={pinMat} position={[0, 0.9, 0]} castShadow />
+      <mesh geometry={pinTip} material={pinMat} position={[0, 0.12, 0]} castShadow />
+      <mesh geometry={pinDot} material={pinDotMat} position={[0, 0.9, 0.5]} />
+      <mesh geometry={pinDot} material={pinDotMat} position={[0, 0.9, -0.5]} />
+    </group>
+  )
 }
 
 function labelFor(site: Site, sel: Sel): { title: string; sub: string } | null {
@@ -138,7 +177,7 @@ function SelLabel({ site, sel }: { site: Site; sel: Sel }) {
     const a = selAnchor(site, sel, world.time)
     if (!ref.current) return
     ref.current.visible = !!a
-    if (a) ref.current.position.set(a.x, a.top + (sel.kind === 'dock' ? 7.2 : 1.2), a.z)
+    if (a) ref.current.position.set(a.x, a.top + (sel.kind === 'dock' ? 7.2 : 4.4), a.z)
   })
   const l = labelFor(site, sel)
   if (!l) return null
@@ -162,6 +201,7 @@ export function SelectionLayer({ site }: { site: Site }) {
     <group>
       {showHover && <Marker key={`h-${hover.kind}-${hover.id}`} site={site} sel={hover} variant="hover" />}
       {sel && <Marker key={`s-${sel.kind}-${sel.id}`} site={site} sel={sel} variant="sel" />}
+      {sel && <Pin key={`p-${sel.kind}-${sel.id}`} site={site} sel={sel} />}
       {sel && sel.kind !== 'dock' && <SelLabel key={`l-${sel.kind}-${sel.id}`} site={site} sel={sel} />}
     </group>
   )
