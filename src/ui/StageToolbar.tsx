@@ -1,12 +1,18 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ScenarioKind } from '../sim/engine'
-import { useUi, world, type ViewMode } from '../store'
+import { useUi, world, type BuildingMode, type ViewMode } from '../store'
 import { daylight } from '../scene/Lighting'
 
 const MODES: [ViewMode, string][] = [
   ['base', '기본'],
   ['stock', '재고'],
   ['traffic', '동선'],
+]
+
+const BUILDING: [BuildingMode, string, string][] = [
+  ['auto', '자동', '확대하거나 대상을 고르면 지붕을 걷고 벽을 낮춥니다'],
+  ['inside', '내부', '항상 지붕을 걷고 안을 보여 줍니다'],
+  ['outside', '외관', '항상 지붕과 벽을 보여 줍니다'],
 ]
 
 const SCENARIOS: { k: ScenarioKind; title: string; desc: string }[] = [
@@ -22,6 +28,8 @@ export function StageToolbar() {
   const setViewMode = useUi((s) => s.setViewMode)
   const lightMode = useUi((s) => s.lightMode)
   const setLightMode = useUi((s) => s.setLightMode)
+  const buildingMode = useUi((s) => s.buildingMode)
+  const setBuildingMode = useUi((s) => s.setBuildingMode)
   const trigger = useUi((s) => s.trigger)
   const [open, setOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -46,6 +54,14 @@ export function StageToolbar() {
       <div className="seg seg--float" role="tablist" aria-label="보기 모드">
         {MODES.map(([m, label]) => (
           <button key={m} type="button" role="tab" aria-selected={viewMode === m} className={viewMode === m ? 'is-on' : ''} onClick={() => setViewMode(m)}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div className="seg seg--float seg--labeled" role="radiogroup" aria-label="건물 보기">
+        <span className="seg-label">건물</span>
+        {BUILDING.map(([m, label, title]) => (
+          <button key={m} type="button" role="radio" aria-checked={buildingMode === m} title={title} className={buildingMode === m ? 'is-on' : ''} onClick={() => setBuildingMode(m)}>
             {label}
           </button>
         ))}
