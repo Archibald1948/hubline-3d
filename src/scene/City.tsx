@@ -62,11 +62,11 @@ function textures() {
     g.fillRect(0, 0, 256, 256)
     for (let j = 0; j < 4; j++) {
       const y = j * 64
-      g.fillStyle = '#5B7895'
+      g.fillStyle = '#8EA9C2'
       g.fillRect(0, y + 4, 256, 40)
-      g.fillStyle = '#7C97B2'
+      g.fillStyle = '#B4C7D8'
       g.fillRect(0, y + 4, 256, 6)
-      g.fillStyle = '#C9D1DA'
+      g.fillStyle = '#E2E7EC'
       for (let x = 0; x < 256; x += 32) g.fillRect(x, y + 4, 3, 40)
     }
   })
