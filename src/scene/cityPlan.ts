@@ -38,9 +38,19 @@ export interface Block {
   near: boolean // 캠퍼스와 맞닿은 블록 (낮게)
 }
 
+// 블록 안 포장면: 골목(alley), 단지 안 길(path), 창고 앞마당(apron)
+export interface Paving {
+  x0: number
+  x1: number
+  z0: number
+  z1: number
+  kind: 'alley' | 'path' | 'apron'
+}
+
 export interface CityPlan {
   roads: Road[]
   blocks: Block[]
+  paving: Paving[]
   bldgs: Bldg[]
   trees: { x: number; z: number; s: number; cone: boolean }[]
   parked: { x: number; z: number; rot: number; color: string }[]
@@ -133,6 +143,7 @@ function build(site: Site): CityPlan {
   const bldgs: Bldg[] = []
   const trees: CityPlan['trees'] = []
   const parked: CityPlan['parked'] = []
+  const paving: Paving[] = []
   // 카메라는 남동쪽(+x, +z) 위에서 내려다본다 → 카메라 쪽 가까운 블록은 낮게
   const camSide = (b: Block) => b.x0 > C.x1 && b.z1 > C.z0 + 20
   for (const b of blocks) {
@@ -159,6 +170,8 @@ function build(site: Site): CityPlan {
         const bd = Math.min(d - 18, r.range(38, 70))
         if (bw < 12 || bd < 12) continue
         const bz = b.z0 + 6 + bd / 2 + r.range(0, Math.max(0, d - 18 - bd))
+        // 하역문 앞마당은 남쪽 도로까지 이어진다
+        paving.push({ x0: lx0 + sw - 2, x1: lx0 + lotW - sw + 2, z0: bz + bd / 2, z1: b.z1, kind: 'apron' })
         bldgs.push({ x: lx0 + lotW / 2, z: bz, w: bw, d: bd, h: r.range(9, 14), rot: 0, facade: 'plain', color: r.pick(WAREHOUSE), roof: r.pick(WAREHOUSE_ROOF), docks: true })
         if (r.chance(0.6)) bldgs.push({ x: lx0 + sw + 5, z: b.z0 + 5, w: 10, d: 7, h: r.range(7, 11), rot: 0, facade: 'ribbon', color: r.pick(OFFICE_COLORS), roof: r.pick(ROOF) })
         // 앞마당 트럭 주차
@@ -171,6 +184,9 @@ function build(site: Site): CityPlan {
       const low = camSide(b)
       const slabD = 13
       const gap = r.range(26, 36)
+      // 단지 안 길: 한쪽 가장자리 세로길 + 동마다 남쪽 앞길(주차)
+      const west = r.chance(0.5)
+      paving.push({ x0: west ? b.x0 + 1 : b.x1 - 4.5, x1: west ? b.x0 + 4.5 : b.x1 - 1, z0: b.z0, z1: b.z1, kind: 'path' })
       let z = b.z0 + 8 + slabD / 2
       while (z + slabD / 2 < b.z1 - 6) {
         let x = b.x0 + 6
@@ -181,6 +197,11 @@ function build(site: Site): CityPlan {
           bldgs.push({ x: x + sw / 2, z: z + r.range(-2, 2), w: sw, d: slabD, h: floors * 2.9, rot: r.chance(0.2) ? r.range(-0.12, 0.12) : 0, facade: 'punch', color: r.pick(APT_COLORS), roof: '#8B939C', accent: r.pick(APT_ACCENTS) })
           x += sw + r.range(10, 18)
         }
+        const pz0 = z + slabD / 2 + 5.5
+        if (pz0 + 4 < b.z1 - 1) {
+          paving.push({ x0: b.x0 + 1, x1: b.x1 - 1, z0: pz0, z1: pz0 + 4, kind: 'path' })
+          for (let px = b.x0 + 8; px < b.x1 - 8; px += 5) if (r.chance(0.35)) parked.push({ x: px, z: pz0 + 3, rot: Math.PI / 2, color: r.pick(CITY_CARS) })
+        }
         for (let tx = b.x0 + 6; tx < b.x1 - 6; tx += r.range(7, 12)) trees.push({ x: tx, z: z + slabD / 2 + gap / 2 + r.range(-3, 3), s: r.range(0.8, 1.2), cone: r.chance(0.2) })
         z += slabD + gap
       }
@@ -189,12 +210,21 @@ function build(site: Site): CityPlan {
     // 상업: 긴 변을 따라 필지를 나누고, 사무동(유리 띠) 또는 상가 건물(1층 상점)
     const alongX = w >= d
     const len = alongX ? w : d
+    const short = alongX ? d : w
+    // 블록이 두꺼우면 가운데로 뒷골목을 내고 건물은 양쪽 도로를 본다
+    const alley = short >= 44
+    const maxDepth = alley ? (short - 6) / 2 : short
+    if (alley) {
+      const cx = (b.x0 + b.x1) / 2
+      const cz = (b.z0 + b.z1) / 2
+      paving.push(alongX ? { x0: b.x0, x1: b.x1, z0: cz - 2.5, z1: cz + 2.5, kind: 'alley' } : { x0: cx - 2.5, x1: cx + 2.5, z0: b.z0, z1: b.z1, kind: 'alley' })
+    }
     let p = 0
     const low = camSide(b)
     while (p < len - 12) {
       const lot = Math.min(r.range(18, 38), len - p)
       if (lot < 12) break
-      const depth = Math.min(alongX ? d : w, r.range(16, 34))
+      const depth = Math.min(maxDepth, r.range(16, 34))
       const set = r.range(2, 5)
       const office = r.chance(0.45)
       const floors = low ? r.int(2, 5) : b.near ? (office ? r.int(4, 8) : r.int(3, 6)) : office ? r.int(6, 16) : r.int(3, 8)
@@ -221,7 +251,12 @@ function build(site: Site): CityPlan {
       const ez = alongX ? (front ? b.z1 - 6 : b.z0 + 6) : czL
       if (r.chance(0.5)) parked.push({ x: ex, z: ez, rot: alongX ? 0 : Math.PI / 2, color: r.pick(CITY_CARS) })
       else trees.push({ x: ex, z: ez, s: r.range(0.8, 1.2), cone: false })
-      p += lot + r.range(0, 4)
+      // 가끔 필지 사이로 도로와 뒷골목을 잇는 샛길
+      if (alley && r.chance(0.25) && p + lot + 6 < len - 12) {
+        const a = (alongX ? b.x0 : b.z0) + p + lot + 0.5
+        paving.push(alongX ? { x0: a, x1: a + 5, z0: b.z0, z1: b.z1, kind: 'alley' } : { x0: b.x0, x1: b.x1, z0: a, z1: a + 5, kind: 'alley' })
+        p += lot + 6
+      } else p += lot + r.range(0, 4)
     }
   }
 
@@ -263,5 +298,5 @@ function build(site: Site): CityPlan {
       signals.push({ x: x - hw, z: z - hz }, { x: x + hw, z: z + hz })
     }
 
-  return { roads, blocks, bldgs, trees, parked, lanes, lights, signals, bounds: { x0: X0, x1: X1, z0: Z0, z1: Z1 } }
+  return { roads, blocks, paving, bldgs, trees, parked, lanes, lights, signals, bounds: { x0: X0, x1: X1, z0: Z0, z1: Z1 } }
 }
