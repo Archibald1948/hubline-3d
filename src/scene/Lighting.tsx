@@ -21,11 +21,11 @@ export function daylight(t: number): number {
 
 const C = {
   bgDay: new THREE.Color(P.bg),
-  bgNight: new THREE.Color('#1c2027'),
-  skyDay: new THREE.Color('#ffffff'),
-  skyNight: new THREE.Color('#8ea3c8'),
-  gndDay: new THREE.Color('#c9c9c4'),
-  gndNight: new THREE.Color('#262a31'),
+  bgNight: new THREE.Color('#121a27'),
+  skyDay: new THREE.Color('#f4f8ff'),
+  skyNight: new THREE.Color('#7f95bd'),
+  gndDay: new THREE.Color('#a9bf93'),
+  gndNight: new THREE.Color('#1f2630'),
   sunDay: new THREE.Color('#ffffff'),
   sunDusk: new THREE.Color('#ffd2a6'),
   moon: new THREE.Color('#b4c6e6'),
@@ -96,7 +96,7 @@ export function Lighting({ site }: { site: Site }) {
 
   return (
     <>
-      <hemisphereLight ref={hemi} args={['#ffffff', '#c9c9c4', 1.7]} />
+      <hemisphereLight ref={hemi} args={['#f4f8ff', '#a9bf93', 1.7]} />
       <directionalLight
         ref={sun}
         castShadow
