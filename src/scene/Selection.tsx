@@ -83,11 +83,11 @@ function BayBox({ site, idx, variant }: { site: Site; idx: number; variant: 'sel
   return (
     <group position={[b.x, (L.RACK_H + 0.25) / 2, b.z]}>
       <lineSegments geometry={edges}>
-        <lineBasicMaterial color={variant === 'sel' ? P.pin : P.hover} />
+        <lineBasicMaterial color={variant === 'sel' ? P.ink : P.hover} />
       </lineSegments>
       <mesh>
         <boxGeometry args={[L.BAY_W + 0.1, L.RACK_H + 0.25, 1.5]} />
-        <meshBasicMaterial color={variant === 'sel' ? P.pin : P.ink} transparent opacity={variant === 'sel' ? 0.12 : 0.05} depthWrite={false} />
+        <meshBasicMaterial color="#ffffff" transparent opacity={variant === 'sel' ? 0.32 : 0.16} depthWrite={false} />
       </mesh>
     </group>
   )
@@ -108,6 +108,8 @@ const pinTip = (() => {
 const pinDot = new THREE.SphereGeometry(0.26, 16, 12)
 const pinMat = new THREE.MeshStandardMaterial({ color: P.pin, roughness: 0.35, metalness: 0.05, emissive: new THREE.Color(P.pin), emissiveIntensity: 0.18 })
 const pinDotMat = new THREE.MeshBasicMaterial({ color: '#ffffff' })
+// 흰 외곽선: 뒷면만 그린 약간 큰 껍질 (파란 건물·랙 위에서도 핀 윤곽이 보이게)
+const pinRimMat = new THREE.MeshBasicMaterial({ color: '#ffffff', side: THREE.BackSide })
 
 function Pin({ site, sel }: { site: Site; sel: Sel }) {
   const ref = useRef<THREE.Group>(null)
@@ -129,6 +131,8 @@ function Pin({ site, sel }: { site: Site; sel: Sel }) {
   })
   return (
     <group ref={ref}>
+      <mesh geometry={pinHead} material={pinRimMat} position={[0, 0.9, 0]} scale={1.16} />
+      <mesh geometry={pinTip} material={pinRimMat} position={[0, 0.1, 0]} scale={[1.22, 1.08, 1.22]} />
       <mesh geometry={pinHead} material={pinMat} position={[0, 0.9, 0]} castShadow />
       <mesh geometry={pinTip} material={pinMat} position={[0, 0.12, 0]} castShadow />
       <mesh geometry={pinDot} material={pinDotMat} position={[0, 0.9, 0.5]} />
