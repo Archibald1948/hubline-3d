@@ -1,4 +1,4 @@
-// 캠퍼스 주변: 나무(호버하면 흔들림), 울타리, 사무동·정비동·경비실, 주차장, 인근 물류단지, 게이트 차단기
+// 캠퍼스 주변: 나무(호버하면 흔들림, 도시 가로수 포함), 울타리, 사무동·정비동·경비실, 주차장, 게이트 차단기
 import { useLayoutEffect, useMemo, useRef } from 'react'
 import { useFrame, type ThreeEvent } from '@react-three/fiber'
 import { Html } from '@react-three/drei'
@@ -10,6 +10,7 @@ import { useUi, world } from '../store'
 import { CAR_COLORS, CONE_COLORS, P, TREE_COLORS } from './palette'
 import { nightMats } from './nightMats'
 import { box, cyl, merged, vcMatMatte, type Part } from './merge'
+import { cityPlan } from './cityPlan'
 
 const tmp = new THREE.Object3D()
 const OFFICE_WHITE = '#F3F4F6'
@@ -42,17 +43,19 @@ function useTrees(site: Site): Tree[] {
     // 사무동 앞 정원
     const o = Lg.facilities.office
     for (let i = 0; i < 5; i++) add(o.x - o.w / 2 + 2 + i * 3.6, o.z - o.d / 2 - 3.5, r.range(0.7, 1))
-    // 바깥 숲: 군집
-    const avoid = { x0: C.x0 - 6, x1: C.x1 + 6, z0: C.z0 - 6, z1: 50 }
-    for (let c = 0; c < 46; c++) {
-      const cx = r.range(C.x0 - 160, C.x1 + 160)
-      const cz = r.range(C.z0 - 110, 170)
-      const n = r.int(5, 13)
+    // 도시 가로수·공원·단지 조경
+    for (const t of cityPlan(site).trees) out.push({ x: t.x, z: t.z, s: t.s, kind: t.cone ? 1 : 0 })
+    // 도시 바깥 숲: 군집
+    const B = cityPlan(site).bounds
+    for (let c = 0; c < 40; c++) {
+      const side = r.int(0, 3)
+      const cx = side === 0 ? r.range(B.x0 - 120, B.x0 - 10) : side === 1 ? r.range(B.x1 + 10, B.x1 + 120) : r.range(B.x0 - 120, B.x1 + 120)
+      const cz = side === 2 ? r.range(B.z0 - 110, B.z0 - 10) : side === 3 ? r.range(B.z1 + 10, B.z1 + 110) : r.range(B.z0, B.z1)
+      const n = r.int(6, 14)
       for (let i = 0; i < n; i++) {
-        const x = cx + r.range(-14, 14)
-        const z = cz + r.range(-14, 14)
-        if (inRect(x, z, avoid) || (z > 27 && z < 48)) continue
-        if (z > 60 && z < 150 && Math.abs(x) < 360 && Math.abs((x + 400) % 130 - 65) < 52) continue // 인근 건물 자리
+        const x = cx + r.range(-16, 16)
+        const z = cz + r.range(-16, 16)
+        if (inRect(x, z, B) || (z > 27 && z < 48)) continue
         add(x, z, r.range(0.9, 1.6))
       }
     }
@@ -234,24 +237,6 @@ function campusStatic(site: Site) {
     parts.push({ geo: box(2.6, 2.8, 2.6), pos: [Lg.exitGateX, 1.4, 45.4], color: OFFICE_WHITE })
     parts.push({ geo: box(3.2, 0.2, 3.2), pos: [Lg.exitGateX, 2.9, 45.4], color: P.wall })
     parts.push({ geo: box(0.35, 1.1, 0.35), pos: [Lg.exitGateX - 1.6, 0.55, 42.6], color: P.frame })
-    // 인근 물류단지 (원경)
-    const r = new Rng(site.cfg.seed + 99)
-    for (let x = -400; x < 400; x += 130) {
-      const w = r.range(70, 104)
-      const d = r.range(46, 70)
-      const h = r.range(9, 14)
-      parts.push({ geo: box(w, h, d), pos: [x + 65, h / 2, 105], color: P.neighbor })
-      parts.push({ geo: box(w + 0.4, 0.5, d + 0.4), pos: [x + 65, h + 0.25, 105], color: P.neighborRoof })
-      for (let i = 0; i < Math.floor(w / 6); i++) parts.push({ geo: box(3, 3.6, 0.1), pos: [x + 65 - w / 2 + 4 + i * 6, 1.8, 105 - d / 2 - 0.05], color: '#B7C0CC' })
-    }
-    for (const [x, z] of [
-      [Lg.campus.x0 - 120, Lg.campus.z0 + 20],
-      [Lg.campus.x1 + 110, Lg.campus.z0 + 10],
-    ]) {
-      const h = r.range(10, 16)
-      parts.push({ geo: box(80, h, 60), pos: [x, h / 2, z], color: P.neighbor })
-      parts.push({ geo: box(80.4, 0.5, 60.4), pos: [x, h + 0.25, z], color: P.neighborRoof })
-    }
     return parts
   })
 }
