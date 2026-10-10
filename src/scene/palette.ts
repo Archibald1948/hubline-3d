@@ -61,18 +61,18 @@ export const P = {
   pin: '#2F62E8',
 } as const
 
-// 운송사별 캡 색 (가상 운송사)
+// 운송사별 캡 색 (가상 운송사). 빨강·호박색은 장면에서 경보 전용이라 쓰지 않는다
 export const CARRIER_COLORS: Record<string, string> = {
   가온운송: '#2F62E8',
-  누리로지텍: '#D9443A',
+  누리로지텍: '#46536B',
   바른화물: '#2B9A64',
-  새솔물류: '#EE8424',
+  새솔물류: '#C8D2DE',
   다온익스프레스: '#6F4BC9',
   한결트랜스: '#1499AE',
-  온길로지스: '#D9A915',
+  온길로지스: '#6E8B3D',
 }
 
-export const CONTAINER_COLORS = ['#C9443A', '#2E8F5E', '#2F5FD0', '#E5832A', '#1A93A8', '#7F8691', '#A93B6A']
+export const CONTAINER_COLORS = ['#4B5D7A', '#2E8F5E', '#2F5FD0', '#B9C2CC', '#1A93A8', '#7F8691', '#7A5AA8']
 export const TREE_COLORS = ['#7DBB5B', '#6AAE4E', '#94C96A', '#5E9F45', '#87C063', '#73B356']
 export const CONE_COLORS = ['#3F7F4A', '#4E8C55', '#5A9960', '#467F52']
 export const SHRUB_COLORS = ['#5E9F4A', '#6DAE52', '#4F8F45', '#7DB85C']
