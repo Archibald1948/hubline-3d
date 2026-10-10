@@ -11,6 +11,7 @@ import { P } from './palette'
 import { nightMats } from './nightMats'
 import { box, cyl, merged, vcMat, vcMatMatte, type Part } from './merge'
 import { cityPlan, CITY_CARS, type Bldg, type CityPlan, type Road } from './cityPlan'
+import { lanesOf, spawnCars, stepCars } from './cityTraffic'
 
 type V3 = [number, number, number]
 const SIDEWALK = 2.6
@@ -279,25 +280,15 @@ const carMat = new THREE.MeshStandardMaterial({ roughness: 0.5, metalness: 0.2 }
 const glassMat = new THREE.MeshStandardMaterial({ color: P.glass, roughness: 0.25, metalness: 0.3 })
 const tmp = new THREE.Object3D()
 
-interface Mover {
-  lane: number
-  phase: number
-  speed: number
-}
-
 function Cars({ plan, seed }: { plan: CityPlan; seed: number }) {
   const body = useRef<THREE.InstancedMesh>(null)
   const cabin = useRef<THREE.InstancedMesh>(null)
   const clock = useRef(0)
-  const movers = useMemo(() => {
-    const r = new Rng(seed)
-    const out: Mover[] = []
-    plan.lanes.forEach((ln, i) => {
-      const n = Math.max(1, Math.floor(ln.len / 85))
-      for (let k = 0; k < n; k++) out.push({ lane: i, phase: (k / n) * ln.len + r.range(0, 30), speed: r.range(7, 11) })
-    })
-    return out
+  const sim = useMemo(() => {
+    const lanes = lanesOf(plan)
+    return { lanes, movers: spawnCars(plan, lanes, seed) }
   }, [plan, seed])
+  const movers = sim.movers
   const total = plan.parked.length + movers.length
 
   useLayoutEffect(() => {
@@ -325,15 +316,17 @@ function Cars({ plan, seed }: { plan: CityPlan; seed: number }) {
 
   useFrame((_, dt) => {
     // 시뮬레이션을 멈추면 차도 멈춘다
-    if (useUi.getState().speed > 0) clock.current += Math.min(dt, 0.1)
+    const step = useUi.getState().speed > 0 ? Math.min(dt, 0.1) : 0
+    clock.current += step
     const b = body.current
     const c = cabin.current
     if (!b || !c) return
     const base = plan.parked.length
+    const t = clock.current
+    if (step > 0) stepCars(sim.lanes, movers, t, step)
     movers.forEach((mv, k) => {
       const ln = plan.lanes[mv.lane]
-      const s = (mv.phase + clock.current * mv.speed) % ln.len
-      tmp.position.set(ln.x + ln.dx * s, 0, ln.z + ln.dz * s)
+      tmp.position.set(ln.x + ln.dx * mv.s, 0, ln.z + ln.dz * mv.s)
       tmp.rotation.set(0, Math.atan2(ln.dx, ln.dz), 0)
       tmp.updateMatrix()
       b.setMatrixAt(base + k, tmp.matrix)
