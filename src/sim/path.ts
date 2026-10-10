@@ -88,8 +88,14 @@ export class Path {
     const { pts, cum } = this
     if (pts.length === 1) return { x: pts[0].x, z: pts[0].z, dx: 0, dz: 0 }
     const dd = Math.max(0, Math.min(this.length, d))
-    let i = 1
-    while (i < cum.length - 1 && cum[i] < dd) i++
+    let lo = 1
+    let hi = cum.length - 1
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1
+      if (cum[mid] < dd) lo = mid + 1
+      else hi = mid
+    }
+    const i = lo
     const seg = cum[i] - cum[i - 1] || 1e-6
     const u = (dd - cum[i - 1]) / seg
     const a = pts[i - 1]
