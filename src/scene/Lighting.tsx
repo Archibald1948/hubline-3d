@@ -93,6 +93,8 @@ export function Lighting({ site }: { site: Site }) {
       nightMats.interior.opacity = night * 0.16
       nightMats.skylight.emissiveIntensity = night * 0.7
       nightMats.sign.emissiveIntensity = night * 0.85
+      nightMats.cityPunch.emissiveIntensity = night * 0.9
+      nightMats.cityRibbon.emissiveIntensity = night * 0.75
     }
   })
 
