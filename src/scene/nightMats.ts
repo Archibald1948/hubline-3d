@@ -22,5 +22,9 @@ export const nightMats = {
   lampHead: new THREE.MeshBasicMaterial({ color: '#d8d8d4' }),
   pool: new THREE.MeshBasicMaterial({ map: poolTexture(), color: '#ffcf8a', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }),
   interior: new THREE.MeshBasicMaterial({ map: null, color: '#fff4dc', transparent: true, opacity: 0, depthWrite: false, blending: THREE.AdditiveBlending }),
+  // 지붕 천창: 밤에는 안쪽 조명이 비친다 (단면 보기에서는 Building이 투명도를 조절)
+  skylight: new THREE.MeshStandardMaterial({ color: P.skylight, roughness: 0.2, metalness: 0.1, emissive: new THREE.Color('#ffe2b0'), emissiveIntensity: 0 }),
+  // 외벽 간판: 밤에는 글자가 켜진다 (map은 Building이 캔버스로 채움)
+  sign: new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.6, emissive: new THREE.Color('#ffffff'), emissiveIntensity: 0 }),
 }
 nightMats.interior.map = nightMats.pool.map
