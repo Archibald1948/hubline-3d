@@ -91,6 +91,8 @@ export function Lighting({ site }: { site: Site }) {
       nightMats.lampHead.color.copy(C.lampOff).lerp(C.lampOn, night)
       nightMats.pool.opacity = night * 0.55
       nightMats.interior.opacity = night * 0.16
+      nightMats.skylight.emissiveIntensity = night * 0.7
+      nightMats.sign.emissiveIntensity = night * 0.85
     }
   })
 
@@ -138,10 +140,8 @@ export function YardLights({ site }: { site: Site }) {
       { geo: box(0.18, 0.14, 2.8), pos: [x, 9.0, 42.9] as [number, number, number], color: P.frame },
     ]),
   )
-  const headGeo = merged(`lampheads-${key}`, () => [
-    ...poles.map((x) => ({ geo: box(0.6, 0.12, 0.9), pos: [x, 8.88, 41.7] as [number, number, number], color: '#fff' })),
-    ...site.docks.map((d) => ({ geo: box(0.7, 0.18, 0.5), pos: [d.x - 1.1, 6.0, L.DOCK_WALL_Z + 0.35] as [number, number, number], color: '#fff' })),
-  ])
+  // 도크 벽등은 건물 외피(Building)에 붙어 있다
+  const headGeo = merged(`lampheads-${key}`, () => poles.map((x) => ({ geo: box(0.6, 0.12, 0.9), pos: [x, 8.88, 41.7] as [number, number, number], color: '#fff' })))
   const pool = (w: number, d: number) => {
     const g = new THREE.PlaneGeometry(w, d)
     g.rotateX(-Math.PI / 2)
