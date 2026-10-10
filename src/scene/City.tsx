@@ -180,12 +180,15 @@ function segments(rd: Road, plan: CityPlan): [number, number][] {
 }
 
 const ZONE_FLOOR = { industrial: '#C7CCD2', commercial: '#D2D5D9', residential: '#B7D49A', park: '#A3CE82', parking: '#5A606A' } as const
+const PAVING = { alley: '#767C86', path: '#DCD7CB', apron: '#9EA5AE' } as const
 
 function groundParts(plan: CityPlan): Part[] {
   const parts: Part[] = []
   const slab = (x0: number, x1: number, z0: number, z1: number, y: number, h: number, color: string) =>
     parts.push({ geo: box(Math.max(0.05, x1 - x0), h, Math.max(0.05, z1 - z0)), pos: [(x0 + x1) / 2, y, (z0 + z1) / 2], color })
   for (const b of plan.blocks) slab(b.x0, b.x1, b.z0, b.z1, -0.035, 0.02, ZONE_FLOOR[b.zone])
+  // 블록 안 포장면은 구역 바닥 위, 골목이 길보다 위
+  for (const pv of plan.paving) slab(pv.x0, pv.x1, pv.z0, pv.z1, pv.kind === 'alley' ? -0.018 : -0.022, 0.02, PAVING[pv.kind])
   for (const rd of plan.roads) {
     const hw = rd.w / 2
     if (rd.axis === 'z') slab(rd.at - hw, rd.at + hw, rd.from, rd.to, -0.028, 0.02, P.road)
@@ -218,6 +221,12 @@ function markParts(plan: CityPlan): { white: Part[]; yellow: Part[] } {
         }
       }
     }
+  }
+  // 주차장 칸 선 (주차 차량 사이)
+  for (const b of plan.blocks) {
+    if (b.zone !== 'parking') continue
+    for (let z = b.z0 + 4; z < b.z1 - 3; z += 6.5)
+      for (let x = b.x0 + 1.6; x < b.x1 - 1.6; x += 2.8) flat(white, x, z, 0.1, 4.6)
   }
   // 교차로 횡단보도
   const avenues = plan.roads.filter((r) => r.axis === 'z')
