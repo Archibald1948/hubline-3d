@@ -57,7 +57,8 @@ const MAIN_Z1 = 43.2
 
 const APT_COLORS = ['#F4F2EC', '#EEF0F2', '#F3EEE4', '#E9EDF1', '#F6F4EF']
 const APT_ACCENTS = ['#2F62E8', '#2B9A64', '#1499AE', '#6F4BC9', '#E08A2E', '#46536B']
-const OFFICE_COLORS = ['#9FB7CF', '#A9C3C0', '#B5BCC6', '#8FA6BF', '#C3CBD4', '#A3B0A8']
+// 유리 띠 텍스처에 곱해지는 색이라 밝게 둔다 (진하면 멀리서 무거운 파랑 덩어리가 된다)
+const OFFICE_COLORS = ['#E3E9EF', '#DCE6E3', '#E6E8EC', '#D6E0EA', '#ECEFF2', '#DFE4DC']
 const MIXED_COLORS = ['#E9E2D6', '#DCD6CC', '#E6E8EA', '#D9CFC2', '#EDE6DA', '#CFD6DC']
 const AWNINGS = ['#1499AE', '#2B9A64', '#2F62E8', '#E7D7A8', '#6F4BC9', '#F2F2EE', '#46536B']
 const WAREHOUSE = ['#E4E7EB', '#D7DCE2', '#E9E6DF', '#CED6DE']
