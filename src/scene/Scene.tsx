@@ -5,6 +5,7 @@ import * as THREE from 'three'
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib'
 import { useUi, world } from '../store'
 import { Ground } from './Ground'
+import { Building } from './Building'
 import { Racks } from './Racks'
 import { Docks } from './Docks'
 import { Trucks } from './Trucks'
@@ -131,6 +132,7 @@ export function Scene() {
       <Lighting site={site} />
       <group key={siteId}>
         <Ground site={site} />
+        <Building site={site} />
         <Surroundings site={site} />
         <YardLights site={site} />
         {viewMode === 'traffic' && <HeatLayer site={site} />}
