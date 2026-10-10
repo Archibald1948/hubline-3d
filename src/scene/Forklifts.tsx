@@ -41,6 +41,8 @@ const loadGeo = () =>
     { geo: box(1.0, 1.08, 0.98), pos: [0, 0.74, 1.46], color: P.goodsA },
   ])
 const lampGeo = new THREE.SphereGeometry(0.12, 10, 8)
+// 모델은 뒷바퀴 쪽 -1.3 ~ 포크 끝 +2.0 → 외곽 중심이 원점에 오도록 민다
+const FL_ORIGIN_Z = -0.35
 const hitGeo = new THREE.BoxGeometry(1.8, 2.6, 3.4)
 const hitMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false })
 
@@ -81,7 +83,7 @@ function ForkliftMesh({ site, f }: { site: Site; f: Forklift }) {
     }
     if (inner.current) inner.current.position.y = Math.max(0, fy.y - 1.7)
     if (lamp.current && lampMat.current) {
-      const moving = f.state === 'toPick' || f.state === 'toDrop' || f.state === 'toCharge'
+      const moving = f.state === 'toPick' || f.state === 'toDrop' || f.state === 'toCharge' || f.state === 'toPark' || f.state === 'toDock'
       const low = f.battery < 25
       const down = f.state === 'down'
       lamp.current.visible = down || f.state === 'charging' || low || (moving && Math.floor(performance.now() / 300) % 2 === 0)
@@ -103,14 +105,17 @@ function ForkliftMesh({ site, f }: { site: Site; f: Forklift }) {
       }}
       onPointerOut={() => setHover(null)}
     >
-      <mesh geometry={staticGeo()} material={vcMat} castShadow receiveShadow />
-      <mesh ref={inner} geometry={innerGeo()} material={vcMat} castShadow />
-      <mesh ref={carriage} geometry={carriageGeo()} material={vcMat} castShadow />
-      <mesh ref={load} geometry={loadGeo()} material={vcMatMatte} castShadow visible={false} />
-      <mesh ref={lamp} geometry={lampGeo} position={[0, 2.46, -0.62]}>
-        <meshBasicMaterial ref={lampMat} color={P.warn} />
-      </mesh>
-      <mesh geometry={hitGeo} material={hitMat} position={[0, 1.2, 0.2]} />
+      {/* 시뮬레이션 기준점 = 차체+포크 외곽(1.2 × 3.3)의 중심 */}
+      <group position={[0, 0, FL_ORIGIN_Z]}>
+        <mesh geometry={staticGeo()} material={vcMat} castShadow receiveShadow />
+        <mesh ref={inner} geometry={innerGeo()} material={vcMat} castShadow />
+        <mesh ref={carriage} geometry={carriageGeo()} material={vcMat} castShadow />
+        <mesh ref={load} geometry={loadGeo()} material={vcMatMatte} castShadow visible={false} />
+        <mesh ref={lamp} geometry={lampGeo} position={[0, 2.46, -0.62]}>
+          <meshBasicMaterial ref={lampMat} color={P.warn} />
+        </mesh>
+        <mesh geometry={hitGeo} material={hitMat} position={[0, 1.2, 0.2]} />
+      </group>
     </group>
   )
 }
