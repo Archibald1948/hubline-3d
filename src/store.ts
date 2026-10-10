@@ -6,6 +6,8 @@ export const world = new World()
 export const SPEEDS = [0, 20, 80, 300] as const
 export type ViewMode = 'base' | 'stock' | 'traffic'
 export type LightMode = 'auto' | 'day'
+// 건물: 자동(확대·선택·재고/동선 모드에서 단면) / 내부(항상 단면) / 외관(항상 지붕·벽)
+export type BuildingMode = 'auto' | 'inside' | 'outside'
 export interface Toast {
   id: number
   text: string
@@ -25,12 +27,14 @@ interface UiState {
   focusNonce: number
   viewMode: ViewMode
   lightMode: LightMode
+  buildingMode: BuildingMode
   searchOpen: boolean
   toast: Toast | null
   fly: { x: number; z: number; n: number } | null
   flyTo: (x: number, z: number) => void
   setViewMode: (m: ViewMode) => void
   setLightMode: (m: LightMode) => void
+  setBuildingMode: (m: BuildingMode) => void
   setSearchOpen: (v: boolean) => void
   trigger: (k: ScenarioKind) => void
   clearToast: (id: number) => void
@@ -52,12 +56,14 @@ export const useUi = create<UiState>((set) => ({
   focusNonce: 0,
   viewMode: 'base',
   lightMode: 'auto',
+  buildingMode: 'auto',
   searchOpen: false,
   toast: null,
   fly: null,
   flyTo: (x, z) => set((s) => ({ fly: { x, z, n: (s.fly?.n ?? 0) + 1 } })),
   setViewMode: (viewMode) => set({ viewMode }),
   setLightMode: (lightMode) => set({ lightMode }),
+  setBuildingMode: (buildingMode) => set({ buildingMode }),
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   trigger: (k) =>
     set((s) => {
