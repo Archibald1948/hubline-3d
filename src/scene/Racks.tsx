@@ -15,7 +15,12 @@ const stockHi = new THREE.Color('#2E2E2E')
 const cWarn = new THREE.Color(P.warn)
 const cCrit = new THREE.Color(P.crit)
 
+const RACK_GHOST = '#8D949E'
+const BEAM_GHOST = '#B7BDC5'
+const ghostGoods = new THREE.Color('#D9DCE0')
+
 function goodsColor(mode: ViewMode, stock: number, shade: number, out: THREE.Color) {
+  if (mode === 'traffic') return out.copy(ghostGoods)
   if (mode !== 'stock') return out.copy(goodsA).lerp(goodsB, shade)
   if (stock <= 1) return out.copy(cCrit)
   if (stock === 2) return out.copy(cWarn)
@@ -59,6 +64,8 @@ export function Racks({ site }: { site: Site }) {
   const version = useRef(-1)
   const modeRef = useRef<ViewMode | null>(null)
   const goodsMat = useRef<THREE.MeshStandardMaterial>(null)
+  const upMat = useRef<THREE.MeshStandardMaterial>(null)
+  const beamMat = useRef<THREE.MeshStandardMaterial>(null)
 
   useLayoutEffect(() => {
     const up = upRef.current!
@@ -95,6 +102,10 @@ export function Racks({ site }: { site: Site }) {
       goodsMat.current.transparent = mode === 'traffic'
       goodsMat.current.opacity = mode === 'traffic' ? 0.28 : 1
       goodsMat.current.needsUpdate = true
+      // 재고·동선 모드에서는 랙을 회색으로 낮춰 상태색(품절·부족·동선)만 색을 갖게 한다
+      const data = mode !== 'base'
+      upMat.current?.color.set(data ? RACK_GHOST : P.rack)
+      beamMat.current?.color.set(data ? BEAM_GHOST : P.beam)
     }
     modeRef.current = mode
     const base = baseRef.current!
@@ -138,11 +149,11 @@ export function Racks({ site }: { site: Site }) {
     <group>
       <instancedMesh ref={upRef} args={[undefined, undefined, uprights.length]} castShadow receiveShadow>
         <boxGeometry args={[0.09, L.RACK_H, 0.09]} />
-        <meshStandardMaterial color={P.rack} roughness={0.7} />
+        <meshStandardMaterial ref={upMat} color={P.rack} roughness={0.7} />
       </instancedMesh>
       <instancedMesh ref={beamRef} args={[undefined, undefined, beams.length]} castShadow>
         <boxGeometry args={[L.BAY_W, 0.11, 0.07]} />
-        <meshStandardMaterial color={P.beam} roughness={0.7} />
+        <meshStandardMaterial ref={beamMat} color={P.beam} roughness={0.7} />
       </instancedMesh>
       <instancedMesh ref={baseRef} args={[undefined, undefined, bays.length * L.BAY_CAP]} castShadow receiveShadow>
         <boxGeometry args={[1.12, 0.14, 1.06]} />
