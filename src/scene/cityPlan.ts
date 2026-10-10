@@ -62,8 +62,8 @@ export interface CityPlan {
 }
 
 const SIDEWALK = 2.6
-const MAIN_Z0 = 30.4
-const MAIN_Z1 = 43.2
+export const MAIN_Z0 = 30.4 // 캠퍼스 앞 트럭 도로
+export const MAIN_Z1 = 43.2
 
 const APT_COLORS = ['#F4F2EC', '#EEF0F2', '#F3EEE4', '#E9EDF1', '#F6F4EF']
 const APT_ACCENTS = ['#2F62E8', '#2B9A64', '#1499AE', '#6F4BC9', '#E08A2E', '#46536B']
