@@ -7,11 +7,12 @@ import * as L from '../sim/layout'
 import type { Site } from '../sim/engine'
 import { Rng } from '../sim/rng'
 import { useUi, world } from '../store'
-import { P } from './palette'
+import { CAR_COLORS, CONE_COLORS, P, TREE_COLORS } from './palette'
 import { nightMats } from './nightMats'
 import { box, cyl, merged, vcMatMatte, type Part } from './merge'
 
 const tmp = new THREE.Object3D()
+const OFFICE_WHITE = '#F3F4F6'
 
 interface Tree {
   x: number
@@ -81,6 +82,11 @@ function Trees({ site }: { site: Site }) {
   }
 
   useLayoutEffect(() => {
+    // 나무마다 조금씩 다른 초록
+    const tc = new THREE.Color()
+    roundIdx.forEach((ti, k) => crownR.current!.setColorAt(k, tc.set(TREE_COLORS[(ti * 7 + 3) % TREE_COLORS.length])))
+    coneIdx.forEach((ti, k) => crownC.current!.setColorAt(k, tc.set(CONE_COLORS[(ti * 5 + 1) % CONE_COLORS.length])))
+    for (const m of [crownR, crownC]) if (m.current!.instanceColor) m.current!.instanceColor.needsUpdate = true
     trees.forEach((t, i) => {
       place(i, 0)
       tmp.position.set(t.x, 0.9 * t.s, t.z)
@@ -122,11 +128,11 @@ function Trees({ site }: { site: Site }) {
     <group>
       <instancedMesh ref={crownR} args={[undefined, undefined, roundIdx.length]} castShadow receiveShadow onPointerOver={shake(roundIdx)} onClick={shake(roundIdx)}>
         <icosahedronGeometry args={[1.7, 1]} />
-        <meshStandardMaterial color={P.tree} roughness={0.95} flatShading />
+        <meshStandardMaterial color="#ffffff" roughness={0.95} flatShading />
       </instancedMesh>
       <instancedMesh ref={crownC} args={[undefined, undefined, coneIdx.length]} castShadow receiveShadow onPointerOver={shake(coneIdx)} onClick={shake(coneIdx)}>
         <coneGeometry args={[1.5, 4.2, 7]} />
-        <meshStandardMaterial color="#EDEDE8" roughness={0.95} flatShading />
+        <meshStandardMaterial color="#ffffff" roughness={0.95} flatShading />
       </instancedMesh>
       <instancedMesh ref={trunk} args={[undefined, undefined, trees.length]} castShadow>
         <cylinderGeometry args={[0.12, 0.17, 1.8, 6]} />
@@ -191,28 +197,42 @@ function campusStatic(site: Site) {
     const sh = Lg.facilities.shop
     const g = Lg.facilities.gate
     const parts: Part[] = []
-    // 사무동 (3층)
-    parts.push({ geo: box(o.w, o.h, o.d), pos: [o.x, o.h / 2, o.z], color: P.wall })
-    parts.push({ geo: box(o.w + 0.4, 0.5, o.d + 0.4), pos: [o.x, o.h + 0.25, o.z], color: P.frame })
+    // 사무동 (3층): 흰 몸체 + 파란 지붕띠 + 주황 계단실 + 층마다 색 띠
+    parts.push({ geo: box(o.w, o.h, o.d), pos: [o.x, o.h / 2, o.z], color: OFFICE_WHITE })
+    parts.push({ geo: box(o.w + 0.4, 0.7, o.d + 0.4), pos: [o.x, o.h + 0.15, o.z], color: P.wall })
+    parts.push({ geo: box(3.0, o.h + 1.4, 4.6), pos: [o.x - o.w / 2 - 1.3, (o.h + 1.4) / 2, o.z - 1.5], color: '#EE8424' })
+    parts.push({ geo: box(0.08, o.h - 1.2, 1.2), pos: [o.x - o.w / 2 - 2.82, (o.h - 1.2) / 2 + 0.6, o.z - 1.5], color: P.glassWall })
+    for (let f = 0; f < 3; f++) {
+      parts.push({ geo: box(o.w + 0.1, 0.32, o.d + 0.1), pos: [o.x, 0.9 + f * 3.4, o.z], color: f === 1 ? '#2B9A64' : '#D9DDE3' })
+    }
+    // 옥상 실외기
+    for (let i = 0; i < 3; i++) parts.push({ geo: box(1.4, 0.9, 1.0), pos: [o.x - 4 + i * 3, o.h + 0.95, o.z + 2], color: '#C9CED6' })
     parts.push({ geo: box(3.6, 0.2, 3.2), pos: [o.x + o.w / 2 + 1.6, 3.1, o.z + 2], color: P.frame })
     parts.push({ geo: box(0.12, 3.0, 0.12), pos: [o.x + o.w / 2 + 3.2, 1.5, o.z + 0.6], color: P.frame })
     parts.push({ geo: box(0.12, 3.0, 0.12), pos: [o.x + o.w / 2 + 3.2, 1.5, o.z + 3.4], color: P.frame })
     for (let f = 0; f < 3; f++) parts.push({ geo: box(0.3, 0.2, 2.2), pos: [o.x + o.w / 2 + 0.05, 2.6 + f * 3.4, o.z + 2], color: '#2A2A2A' })
-    // 정비동
-    parts.push({ geo: box(sh.w, sh.h, sh.d), pos: [sh.x, sh.h / 2, sh.z], color: '#F2F2EF' })
-    parts.push({ geo: box(sh.w + 0.4, 0.4, sh.d + 0.4), pos: [sh.x, sh.h + 0.2, sh.z], color: P.frame })
-    for (let i = 0; i < 3; i++) parts.push({ geo: box(4.2, 4.6, 0.1), pos: [sh.x - sh.w / 2 + 3.6 + i * 6.4, 2.3, sh.z + sh.d / 2 + 0.03], color: '#4A4A47' })
-    parts.push({ geo: cyl(2.6, 7, 20), pos: [sh.x + sh.w / 2 + 5, 3.5, sh.z - 3], color: '#E2E2DE' })
-    parts.push({ geo: box(2.2, 1.8, 1.6), pos: [sh.x + sh.w / 2 + 5, 0.9, sh.z + 3.5], color: '#9A9A95' })
+    // 정비동: 밝은 회색 벽 + 파란 지붕띠 + 롤업 셔터 3개
+    parts.push({ geo: box(sh.w, sh.h, sh.d), pos: [sh.x, sh.h / 2, sh.z], color: '#E6E9ED' })
+    parts.push({ geo: box(sh.w + 0.4, 0.6, sh.d + 0.4), pos: [sh.x, sh.h + 0.1, sh.z], color: P.roofDeck })
+    parts.push({ geo: box(sh.w + 0.5, 0.5, 0.3), pos: [sh.x, sh.h + 0.15, sh.z + sh.d / 2 + 0.1], color: P.wall })
+    parts.push({ geo: box(sh.w + 0.5, 0.5, 0.3), pos: [sh.x, sh.h + 0.15, sh.z - sh.d / 2 - 0.1], color: P.wall })
+    for (let i = 0; i < 3; i++) {
+      const x = sh.x - sh.w / 2 + 3.6 + i * 6.4
+      parts.push({ geo: box(4.2, 4.6, 0.1), pos: [x, 2.3, sh.z + sh.d / 2 + 0.03], color: P.door })
+      parts.push({ geo: box(4.6, 0.3, 0.2), pos: [x, 4.75, sh.z + sh.d / 2 + 0.05], color: P.trim })
+    }
+    parts.push({ geo: cyl(2.6, 7, 20), pos: [sh.x + sh.w / 2 + 5, 3.5, sh.z - 3], color: '#F2F4F6' })
+    parts.push({ geo: cyl(2.65, 0.4, 20), pos: [sh.x + sh.w / 2 + 5, 5.2, sh.z - 3], color: P.wall })
+    parts.push({ geo: box(2.2, 1.8, 1.6), pos: [sh.x + sh.w / 2 + 5, 0.9, sh.z + 3.5], color: '#8C939D' })
     // 정문 경비실 + 캐노피
-    parts.push({ geo: box(g.w, g.h, g.d), pos: [g.x, g.h / 2, g.z], color: P.wall })
-    parts.push({ geo: box(g.w + 0.8, 0.2, g.d + 0.8), pos: [g.x, g.h + 0.1, g.z], color: P.frame })
+    parts.push({ geo: box(g.w, g.h, g.d), pos: [g.x, g.h / 2, g.z], color: OFFICE_WHITE })
+    parts.push({ geo: box(g.w + 0.8, 0.2, g.d + 0.8), pos: [g.x, g.h + 0.1, g.z], color: P.wall })
     parts.push({ geo: box(0.35, 1.1, 0.35), pos: [g.x + 1.6, 0.55, L.LANE_IN - 3.2], color: P.frame })
     for (const z of [30.6, 43]) parts.push({ geo: box(0.4, 6.4, 0.4), pos: [g.x + 6, 3.2, z], color: P.frame })
     parts.push({ geo: box(1.2, 0.8, 13), pos: [g.x + 6, 6.6, 36.8], color: P.frame })
     // 후문(출구) 경비실
-    parts.push({ geo: box(2.6, 2.8, 2.6), pos: [Lg.exitGateX, 1.4, 45.4], color: P.wall })
-    parts.push({ geo: box(3.2, 0.2, 3.2), pos: [Lg.exitGateX, 2.9, 45.4], color: P.frame })
+    parts.push({ geo: box(2.6, 2.8, 2.6), pos: [Lg.exitGateX, 1.4, 45.4], color: OFFICE_WHITE })
+    parts.push({ geo: box(3.2, 0.2, 3.2), pos: [Lg.exitGateX, 2.9, 45.4], color: P.wall })
     parts.push({ geo: box(0.35, 1.1, 0.35), pos: [Lg.exitGateX - 1.6, 0.55, 42.6], color: P.frame })
     // 인근 물류단지 (원경)
     const r = new Rng(site.cfg.seed + 99)
@@ -221,8 +241,8 @@ function campusStatic(site: Site) {
       const d = r.range(46, 70)
       const h = r.range(9, 14)
       parts.push({ geo: box(w, h, d), pos: [x + 65, h / 2, 105], color: P.neighbor })
-      parts.push({ geo: box(w + 0.4, 0.4, d + 0.4), pos: [x + 65, h + 0.2, 105], color: '#CFCFCB' })
-      for (let i = 0; i < Math.floor(w / 6); i++) parts.push({ geo: box(3, 3.6, 0.1), pos: [x + 65 - w / 2 + 4 + i * 6, 1.8, 105 - d / 2 - 0.05], color: '#9C9C97' })
+      parts.push({ geo: box(w + 0.4, 0.5, d + 0.4), pos: [x + 65, h + 0.25, 105], color: P.neighborRoof })
+      for (let i = 0; i < Math.floor(w / 6); i++) parts.push({ geo: box(3, 3.6, 0.1), pos: [x + 65 - w / 2 + 4 + i * 6, 1.8, 105 - d / 2 - 0.05], color: '#B7C0CC' })
     }
     for (const [x, z] of [
       [Lg.campus.x0 - 120, Lg.campus.z0 + 20],
@@ -230,6 +250,7 @@ function campusStatic(site: Site) {
     ]) {
       const h = r.range(10, 16)
       parts.push({ geo: box(80, h, 60), pos: [x, h / 2, z], color: P.neighbor })
+      parts.push({ geo: box(80.4, 0.5, 60.4), pos: [x, h + 0.25, z], color: P.neighborRoof })
     }
     return parts
   })
@@ -257,7 +278,7 @@ function parkingCars(site: Site) {
     const p = site.layout.facilities.parking
     const r = new Rng(site.cfg.seed + 11)
     let k = 0
-    const colors = ['#1B1B1B', '#F6F6F4', '#9A9A95', '#D9D9D5', '#4A4A47', '#2F4C7D']
+    const colors = CAR_COLORS
     const parts: Part[] = []
     const cols = Math.floor((p.w - 2) / 2.7)
     for (const zRow of [p.z - p.d / 2 + 3.2, p.z + p.d / 2 - 3.2]) {
@@ -266,8 +287,10 @@ function parkingCars(site: Site) {
         parts.push({ geo: box(0.1, 0.02, 4.6), pos: [x - 1.35, 0.01, zRow], color: P.lane })
         if (!site.parked[k++]) continue
         const c = r.pick(colors)
-        parts.push({ geo: box(1.75, 0.72, 4.2), pos: [x, 0.56, zRow], color: c })
-        parts.push({ geo: box(1.52, 0.55, 2.2), pos: [x, 1.18, zRow - 0.15], color: c === '#1B1B1B' ? '#2C2C2C' : P.glass })
+        parts.push({ geo: box(1.75, 0.66, 4.2), pos: [x, 0.55, zRow], color: c })
+        parts.push({ geo: box(1.56, 0.5, 2.1), pos: [x, 1.12, zRow - 0.1], color: P.glass })
+        parts.push({ geo: box(1.5, 0.06, 1.9), pos: [x, 1.4, zRow - 0.1], color: c })
+        for (const wz of [-1.3, 1.3]) parts.push({ geo: box(1.82, 0.5, 0.62), pos: [x, 0.3, zRow + wz], color: P.tire })
       }
     }
     return parts
