@@ -1510,6 +1510,15 @@ p {
   background: var(--ink);
   color: #fff;
 }
+.seg--labeled {
+  align-items: center;
+}
+.seg-label {
+  padding: 0 4px 0 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3);
+}
 .chip-btn {
   display: inline-flex;
   align-items: center;
