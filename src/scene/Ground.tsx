@@ -174,12 +174,14 @@ export function Ground({ site }: { site: Site }) {
 
       {/* 충전 스테이션 */}
       {Lg.chargers.map((c, i) => {
-        const west = c.x < 0
-        const cx = west ? W.x0 + 0.45 : W.x1 - 0.45
+        // 충전 칸은 랙 앞 대기 칸 줄의 양 끝 — 칸 옆에 충전기 기둥, 바닥에 칸 표시
+        const side = c.x < 0 ? -1 : 1
+        const cx = c.x + side * 1.2
         return (
           <group key={i}>
-            <Block p={[cx, 0.75, c.z]} s={[0.45, 1.5, 0.9]} c={P.frame} cast />
-            <mesh position={[cx + (west ? 0.25 : -0.25), 1.25, c.z]}>
+            <Strip x0={c.x - 0.75} x1={c.x + 0.75} z0={c.z - 1.85} z1={c.z + 1.85} c={P.zone} y={0.008} />
+            <Block p={[cx, 0.75, c.z + 0.9]} s={[0.3, 1.5, 0.5]} c={P.frame} cast />
+            <mesh position={[cx - side * 0.16, 1.25, c.z + 0.9]}>
               <boxGeometry args={[0.04, 0.12, 0.3]} />
               <meshBasicMaterial color={P.ok} />
             </mesh>
