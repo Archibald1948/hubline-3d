@@ -72,6 +72,10 @@ export function flStateLabel(f: Forklift): string {
   switch (f.state) {
     case 'idle':
       return '대기'
+    case 'toPark':
+      return '대기 칸으로 이동'
+    case 'toDock':
+      return '도크로 복귀'
     case 'toPick':
       return d === 'in' ? '도크로 이동' : '랙으로 이동'
     case 'picking':
@@ -85,7 +89,7 @@ export function flStateLabel(f: Forklift): string {
     case 'charging':
       return '충전 중'
     case 'down':
-      return '고장 · 정비 중'
+      return f.towing ? '고장 · 견인 중' : '고장 · 정비 중'
   }
 }
 
